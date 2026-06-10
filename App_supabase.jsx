@@ -521,6 +521,21 @@ function Dashboard({ projects, currentUser }) {
     overdue:  filtered.filter(p => p._effectiveStatus === "到期未付款").reduce((s, p) => s + p.taxAmount, 0),
   };
 
+  // 依「預計收款日」分月統計（不受上方月份篩選影響，一律看全部）
+  const monthlyExpected = (() => {
+    const map = {};
+    visible.forEach(p => {
+      const ym = (p.expectedPayDate || "").slice(0, 7);
+      if (!ym) return;
+      if (!map[ym]) map[ym] = { total: 0, received: 0, pending: 0, count: 0 };
+      map[ym].total += p.taxAmount || 0;
+      map[ym].count += 1;
+      if (p._effectiveStatus === "已付款") map[ym].received += (p.paidAmount || p.taxAmount || 0);
+      else map[ym].pending += p.taxAmount || 0;
+    });
+    return Object.entries(map).sort((a, b) => a[0].localeCompare(b[0]));
+  })();
+
   const fmtMonth = (m) => {
     if (m === "all") return "全部月份";
     const [y, mo] = m.split("-");
@@ -555,6 +570,51 @@ function Dashboard({ projects, currentUser }) {
         <StatCard label="已付款金額" value={fmt(stats.paid)} color="#4CAF50" icon="✅" />
         <StatCard label="到期未付款金額" value={fmt(stats.overdue)} color="#F44336" icon="⚠️" />
       </div>
+
+      {/* 每月預計收款金額總覽（依預計收款日） */}
+      <Card>
+        <h3 style={{ ...sectionTitle, marginBottom: 16 }}>📅 每月預計收款金額總覽</h3>
+        {monthlyExpected.length === 0 ? (
+          <div style={{ color: "#aaa", textAlign: "center", padding: 24 }}>尚無預計收款日資料</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+              <thead>
+                <tr style={{ background: "#F8F9FA" }}>
+                  <th style={{ padding: "10px 14px", textAlign: "left", color: "#555", fontWeight: 600, borderBottom: "2px solid #F0F0F0", whiteSpace: "nowrap" }}>收款月份</th>
+                  <th style={{ padding: "10px 14px", textAlign: "right", color: "#555", fontWeight: 600, borderBottom: "2px solid #F0F0F0", whiteSpace: "nowrap" }}>預計收款總額</th>
+                  <th style={{ padding: "10px 14px", textAlign: "right", color: "#555", fontWeight: 600, borderBottom: "2px solid #F0F0F0", whiteSpace: "nowrap" }}>已收款</th>
+                  <th style={{ padding: "10px 14px", textAlign: "right", color: "#555", fontWeight: 600, borderBottom: "2px solid #F0F0F0", whiteSpace: "nowrap" }}>未收款</th>
+                  <th style={{ padding: "10px 14px", textAlign: "center", color: "#555", fontWeight: 600, borderBottom: "2px solid #F0F0F0", whiteSpace: "nowrap" }}>筆數</th>
+                </tr>
+              </thead>
+              <tbody>
+                {monthlyExpected.map(([ym, d]) => {
+                  const [y, mo] = ym.split("-");
+                  return (
+                    <tr key={ym} style={{ borderBottom: "1px solid #F4F4F4" }}>
+                      <td style={{ padding: "10px 14px", fontWeight: 600, color: "#1a1a2e", whiteSpace: "nowrap" }}>{y} 年 {parseInt(mo)} 月</td>
+                      <td style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, color: "#1a1a2e", whiteSpace: "nowrap" }}>{fmt(d.total)}</td>
+                      <td style={{ padding: "10px 14px", textAlign: "right", color: "#2E7D32", fontWeight: 600, whiteSpace: "nowrap" }}>{d.received ? fmt(d.received) : "-"}</td>
+                      <td style={{ padding: "10px 14px", textAlign: "right", color: d.pending ? "#E65100" : "#bbb", fontWeight: 600, whiteSpace: "nowrap" }}>{d.pending ? fmt(d.pending) : "-"}</td>
+                      <td style={{ padding: "10px 14px", textAlign: "center", color: "#888" }}>{d.count}</td>
+                    </tr>
+                  );
+                })}
+                <tr style={{ borderTop: "2px solid #E0E0E0", background: "#FAFAFA" }}>
+                  <td style={{ padding: "12px 14px", fontWeight: 700, color: "#1a1a2e" }}>合計</td>
+                  <td style={{ padding: "12px 14px", textAlign: "right", fontWeight: 700, color: "#1a1a2e", whiteSpace: "nowrap" }}>{fmt(monthlyExpected.reduce((s,[,d])=>s+d.total,0))}</td>
+                  <td style={{ padding: "12px 14px", textAlign: "right", fontWeight: 700, color: "#2E7D32", whiteSpace: "nowrap" }}>{fmt(monthlyExpected.reduce((s,[,d])=>s+d.received,0))}</td>
+                  <td style={{ padding: "12px 14px", textAlign: "right", fontWeight: 700, color: "#E65100", whiteSpace: "nowrap" }}>{fmt(monthlyExpected.reduce((s,[,d])=>s+d.pending,0))}</td>
+                  <td style={{ padding: "12px 14px", textAlign: "center", fontWeight: 700, color: "#888" }}>{monthlyExpected.reduce((s,[,d])=>s+d.count,0)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      <div style={{ height: 20 }} />
 
       {/* 進度追蹤 */}
       <Card>
