@@ -137,7 +137,7 @@ const dbToProject = (r) => ({
   clientTitle: r.client_title||"", taxId: r.tax_id||"",
   amount: Number(r.amount)||0, taxAmount: Number(r.tax_amount)||0,
   status: r.status, invoiceDate: r.invoice_date||"",
-  expectedPayDate: r.expected_pay_date||"", orderNo: r.order_no||"",
+  expectedPayDate: r.expected_pay_date||"", orderNo: r.order_no||"", payMethod: r.pay_method||"",
   invoiceNo: r.invoice_no||"", vendorId: r.vendor_id,
   paid: Number(r.paid)||0,
   paidAmount: r.paid_amount!=null?Number(r.paid_amount):undefined,
@@ -153,7 +153,7 @@ const projectToDb = (p) => ({
   client_title: p.clientTitle||"", tax_id: p.taxId||"",
   amount: p.amount||0, tax_amount: p.taxAmount||0,
   status: p.status, invoice_date: p.invoiceDate||null,
-  expected_pay_date: p.expectedPayDate||null, order_no: p.orderNo||"",
+  expected_pay_date: p.expectedPayDate||null, order_no: p.orderNo||"", pay_method: p.payMethod||null,
   invoice_no: p.invoiceNo||"", vendor_id: p.vendorId||null,
   paid: p.paid||0, paid_amount: p.paidAmount??null,
   paid_date: p.paidDate||null, bank_fee: p.bankFee??null,
@@ -228,7 +228,7 @@ function StatCard({ label, value, color, icon }) {
 function InvoiceForm({ currentUser, vendors, onSubmit, prefillData, onClearPrefill }) {
   const [form, setForm] = useState({
     company: currentUser.company === "所有" ? "紳太" : currentUser.company,
-    clientTitle: "", taxId: "", invoiceDate: "", expectedPayDate: "", vendorId: "", file: null,
+    clientTitle: "", taxId: "", invoiceDate: "", expectedPayDate: "", payMethod: "匯款", vendorId: "", file: null,
     items: [{ label: "", qty: 1, unitPrice: 0, untaxAmt: 0, taxAmt: 0 }]
   });
 
@@ -251,6 +251,7 @@ function InvoiceForm({ currentUser, vendors, onSubmit, prefillData, onClearPrefi
       clientTitle: prefillData.clientTitle || "",
       taxId: prefillData.taxId || "",
       expectedPayDate: prefillData.expectedPayDate || "",
+      payMethod: prefillData.payMethod || "匯款",
       orderNo: prefillData.orderNo || "",
       vendorId: prefillData.vendorId || "",
       invoiceDate: "",
@@ -349,6 +350,12 @@ function InvoiceForm({ currentUser, vendors, onSubmit, prefillData, onClearPrefi
           <div style={field}>
             <label style={lbl}>委刊單編號/其他備註</label>
             <input style={inp} value={form.orderNo || ""} onChange={e => setForm({ ...form, orderNo: e.target.value })} placeholder="請填入委刊單編號或其他備註" />
+          </div>
+          <div style={field}>
+            <label style={lbl}>付款方式</label>
+            <select style={inp} value={form.payMethod || "匯款"} onChange={e => setForm({ ...form, payMethod: e.target.value })}>
+              {["匯款","支票","關係人沖帳"].map(m => <option key={m}>{m}</option>)}
+            </select>
           </div>
         </div>
       </Card>
@@ -514,17 +521,19 @@ function Dashboard({ projects, currentUser }) {
     ? visible
     : visible.filter(p => (p.invoiceDate || "").startsWith(selectedMonth));
 
+  // 儀表板金額統計排除「關係人沖帳」（非實際金流）
+  const cashFlow = filtered.filter(p => p.payMethod !== "關係人沖帳");
   const stats = {
-    pending:  filtered.filter(p => p._effectiveStatus === "申請中").reduce((s, p) => s + p.taxAmount, 0),
-    issued:   filtered.filter(p => ["已開立","已付款"].includes(p._effectiveStatus)).reduce((s, p) => s + p.taxAmount, 0),
-    paid:     filtered.filter(p => p._effectiveStatus === "已付款").reduce((s, p) => s + p.taxAmount, 0),
-    overdue:  filtered.filter(p => p._effectiveStatus === "到期未付款").reduce((s, p) => s + p.taxAmount, 0),
+    pending:  cashFlow.filter(p => p._effectiveStatus === "申請中").reduce((s, p) => s + p.taxAmount, 0),
+    issued:   cashFlow.filter(p => ["已開立","已付款"].includes(p._effectiveStatus)).reduce((s, p) => s + p.taxAmount, 0),
+    paid:     cashFlow.filter(p => p._effectiveStatus === "已付款").reduce((s, p) => s + p.taxAmount, 0),
+    overdue:  cashFlow.filter(p => p._effectiveStatus === "到期未付款").reduce((s, p) => s + p.taxAmount, 0),
   };
 
   // 依「預計收款日」分月統計（不受上方月份篩選影響，一律看全部）
   const monthlyExpected = (() => {
     const map = {};
-    visible.forEach(p => {
+    visible.filter(p => p.payMethod !== "關係人沖帳").forEach(p => {
       const ym = (p.expectedPayDate || "").slice(0, 7);
       if (!ym) return;
       if (!map[ym]) map[ym] = { total: 0, received: 0, pending: 0, count: 0 };
@@ -1667,7 +1676,7 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
           const merged = { ...dm, ...ef2 };
           const clean = {
             id:merged.id, applicant:merged.applicant, company:merged.company, title:merged.title,
-            clientTitle:merged.clientTitle||"", taxId:merged.taxId||"", orderNo:merged.orderNo||"",
+            clientTitle:merged.clientTitle||"", taxId:merged.taxId||"", orderNo:merged.orderNo||"", payMethod:merged.payMethod||"",
             invoiceNo:merged.invoiceNo||"", invoiceDate:nullIfEmpty(merged.invoiceDate),
             expectedPayDate:nullIfEmpty(merged.expectedPayDate), status:merged.status,
             amount:numOrNull(merged.amount), taxAmount:numOrNull(merged.taxAmount),
@@ -1708,7 +1717,7 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
                         paidDate:prev.paidDate||"", paidAmount:prev.paidAmount||"",
                         bankFee:prev.bankFee||"", commission:prev.commission||"",
                         commissionNo:prev.commissionNo||"", expenseNo:prev.expenseNo||"",
-                        voucherNo:prev.voucherNo||"", amount:prev.amount, taxAmount:prev.taxAmount,
+                        voucherNo:prev.voucherNo||"", payMethod:prev.payMethod||"", amount:prev.amount, taxAmount:prev.taxAmount,
                         items: prev.items&&prev.items.length>0 ? prev.items.map(i=>({...i})) : [{label:"",qty:1,unitPrice:0,untaxAmt:0,taxAmt:0}],
                       }}))}
                         style={{ border:"1px solid #ddd", background:"#F8F9FA", color:"#444", borderRadius:8, padding:"6px 14px", fontSize:13, cursor:"pointer", fontWeight:600 }}>
@@ -1736,11 +1745,14 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
                 <Section title="款項資訊" color="#5C85D6">
                   {isEditingModal ? <>
                     <ERow label="公司抬頭" field="clientTitle"/><ERow label="統一編號" field="taxId"/>
-                    <ERow label="委刊單編號" field="orderNo"/><ERow label="未稅金額" field="amount" type="number"/>
+                    <ERow label="委刊單編號" field="orderNo"/>
+                    <ERow label="付款方式" field="payMethod" options={["匯款","支票","關係人沖帳"]}/>
+                    <ERow label="未稅金額" field="amount" type="number"/>
                     <ERow label="含稅金額" field="taxAmount" type="number"/>
                   </> : <>
                     <Row label="公司抬頭" value={dm.clientTitle}/><Row label="統一編號" value={dm.taxId} mono/>
                     <Row label="委刊單編號" value={dm.orderNo} mono/>
+                    <Row label="付款方式" value={dm.payMethod}/>
                     <Row label="未稅金額" value={untaxAmt?`NT$ ${untaxAmt.toLocaleString()}`:null}/>
                     <Row label="5% 稅額" value={taxOnly>0?`NT$ ${taxOnly.toLocaleString()}`:null}/>
                     <Row label="含稅金額" value={taxAmt?`NT$ ${taxAmt.toLocaleString()}`:null} highlight/>
@@ -2704,7 +2716,7 @@ export default function App() {
           status: "申請中",
           invoiceDate: formData.invoiceDate||new Date().toISOString().split("T")[0],
           expectedPayDate: formData.expectedPayDate||"",
-          orderNo: formData.orderNo||"", vendorId, paid: 0,
+          orderNo: formData.orderNo||"", payMethod: formData.payMethod||"匯款", vendorId, paid: 0,
         }),
         theme,
       };
