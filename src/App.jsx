@@ -1461,6 +1461,21 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [issueModal, setIssueModal] = useState(null);
   const [invoiceNo, setInvoiceNo] = useState("");
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDir, setSortDir] = useState("asc");
+
+  const toggleSort = (key) => {
+    if (sortKey === key) {
+      setSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+  };
+
+  const arrow = (key) => sortKey === key
+    ? <span style={{ marginLeft: 4, color: "#F2A0A0", fontWeight: 700 }}>{sortDir === "asc" ? "▲" : "▼"}</span>
+    : <span style={{ marginLeft: 4, color: "#ccc", fontSize: 10 }}>⇅</span>;
 
   const canEdit = currentUser.role === "finance" || currentUser.role === "admin";
   const canDelete = currentUser.role === "finance" || currentUser.role === "admin" || currentUser.role === "manager";
@@ -1477,11 +1492,24 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
     return `${y}年${parseInt(mo)}月`;
   };
 
-  const filtered = visible
+  const filteredUnsorted = visible
     .filter(p => selectedMonth === "all" || (p.invoiceDate || "").startsWith(selectedMonth))
     .filter(p => !dateFrom || (p.invoiceDate || "") >= dateFrom)
     .filter(p => !dateTo   || (p.invoiceDate || "") <= dateTo)
     .filter(p => !filter || p._effectiveStatus === filter);
+
+  // 數字型欄位（用數值比較），其餘用字串比較
+  const NUMERIC_KEYS = ["taxAmount", "paidAmount", "bankFee", "commission"];
+  const filtered = sortKey ? [...filteredUnsorted].sort((a, b) => {
+    let av = a[sortKey], bv = b[sortKey];
+    if (sortKey === "status") { av = a._effectiveStatus; bv = b._effectiveStatus; }
+    if (NUMERIC_KEYS.includes(sortKey)) {
+      av = Number(av) || 0; bv = Number(bv) || 0;
+      return sortDir === "asc" ? av - bv : bv - av;
+    }
+    av = (av || "").toString(); bv = (bv || "").toString();
+    return sortDir === "asc" ? av.localeCompare(bv, "zh-Hant") : bv.localeCompare(av, "zh-Hant");
+  }) : filteredUnsorted;
 
   const startEdit = (p) => {
     setEditingId(p.id);
@@ -1864,17 +1892,17 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
           <table style={{ borderCollapse: "collapse", fontSize: 13, tableLayout: isMobile ? "auto" : "fixed", width: isMobile ? "auto" : "100%", minWidth: isMobile ? 700 : 1590 }}>
             <thead>
               <tr style={{ background: "#F8F9FA" }}>
-                <th style={{ ...sTh, left: 0,   width: 100, minWidth: 100, top: 0, zIndex: 4 }}>賣方</th>
-                <th style={{ ...sTh, left: 100, width: 160, minWidth: 160, top: 0, zIndex: 4 }}>買方</th>
-                <th style={{ ...sTh, left: 260, width: 100, minWidth: 100, borderRight: isMobile ? "none" : "2px solid #D0D0D0", top: 0, zIndex: 4 }}>含稅金額</th>
+                <th onClick={() => toggleSort("company")} style={{ ...sTh, left: 0,   width: 100, minWidth: 100, top: 0, zIndex: 4, cursor: "pointer", userSelect: "none" }}>賣方{arrow("company")}</th>
+                <th onClick={() => toggleSort("clientTitle")} style={{ ...sTh, left: 100, width: 160, minWidth: 160, top: 0, zIndex: 4, cursor: "pointer", userSelect: "none" }}>買方{arrow("clientTitle")}</th>
+                <th onClick={() => toggleSort("taxAmount")} style={{ ...sTh, left: 260, width: 100, minWidth: 100, borderRight: isMobile ? "none" : "2px solid #D0D0D0", top: 0, zIndex: 4, cursor: "pointer", userSelect: "none" }}>含稅金額{arrow("taxAmount")}</th>
                 {[
-                  ["統編/身分證", 110], ["發票日期", 100], ["發票號碼", 120],
-                  ["實際收款日", 100], ["預計收款日", 100], ["付款狀態", 120],
-                  ["已收款金額", 100], ["手續費", 80], ["佣金", 80],
-                  ["說明", 110], ["支出申請單編號", 130], ["傳票號碼", 110],
-                  ["申請人", 90], ["操作", 130],
-                ].map(([h, w]) => (
-                  <th key={h} style={{ padding: "12px 14px", textAlign: "left", color: "#555", fontWeight: 600, borderBottom: "2px solid #F0F0F0", whiteSpace: "nowrap", background: "#F8F9FA", width: w, minWidth: w, position: isMobile ? "static" : "sticky", top: 0, zIndex: 3 }}>{h}</th>
+                  ["統編/身分證", 110, "taxId"], ["發票日期", 100, "invoiceDate"], ["發票號碼", 120, "invoiceNo"],
+                  ["實際收款日", 100, "paidDate"], ["預計收款日", 100, "expectedPayDate"], ["付款狀態", 120, "status"],
+                  ["已收款金額", 100, "paidAmount"], ["手續費", 80, "bankFee"], ["佣金", 80, "commission"],
+                  ["說明", 110, "commissionNo"], ["支出申請單編號", 130, "expenseNo"], ["傳票號碼", 110, "voucherNo"],
+                  ["申請人", 90, "applicant"], ["操作", 130, null],
+                ].map(([h, w, key]) => (
+                  <th key={h} onClick={key ? () => toggleSort(key) : undefined} style={{ padding: "12px 14px", textAlign: "left", color: "#555", fontWeight: 600, borderBottom: "2px solid #F0F0F0", whiteSpace: "nowrap", background: "#F8F9FA", width: w, minWidth: w, position: isMobile ? "static" : "sticky", top: 0, zIndex: 3, cursor: key ? "pointer" : "default", userSelect: "none" }}>{h}{key ? arrow(key) : null}</th>
                 ))}
               </tr>
             </thead>
