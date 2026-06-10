@@ -1969,7 +1969,7 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
                 <th onClick={() => toggleSort("taxAmount")} style={{ ...sTh, left: 260, width: 100, minWidth: 100, borderRight: isMobile ? "none" : "2px solid #D0D0D0", top: 0, zIndex: 4, cursor: "pointer", userSelect: "none" }}>含稅金額{arrow("taxAmount")}</th>
                 {[
                   ["統編/身分證", 110, "taxId"], ["發票日期", 100, "invoiceDate"], ["發票號碼", 120, "invoiceNo"],
-                  ["實際收款日", 100, "paidDate"], ["預計收款日", 100, "expectedPayDate"], ["付款狀態", 120, "status"],
+                  ["實際收款日", 100, "paidDate"], ["預計收款日", 100, "expectedPayDate"], ["付款狀態", 120, "status"], ["付款方式", 90, "payMethod"],
                   ["已收款金額", 100, "paidAmount"], ["手續費", 80, "bankFee"], ["佣金", 80, "commission"],
                   ["說明", 110, "commissionNo"], ["支出申請單編號", 130, "expenseNo"], ["傳票號碼", 110, "voucherNo"],
                   ["申請人", 90, "applicant"], ["操作", 130, null],
@@ -2018,6 +2018,12 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
                             {["申請中","已開立","到期未付款","已付款"].map(s => <option key={s}>{s}</option>)}
                           </select>
                         </td>
+                        <td style={{ ...td, width: 90, minWidth: 90 }}>
+                          <select style={{ ...inp, padding: "5px 8px", fontSize: 12, width: "100%" }} value={ef.payMethod || ""} onChange={e => setEf("payMethod", e.target.value)}>
+                            <option value="">-</option>
+                            {["匯款","支票","關係人沖帳"].map(m => <option key={m}>{m}</option>)}
+                          </select>
+                        </td>
                         <td style={{ ...td, width: 100, minWidth: 100 }}>
                           <input style={{ ...inp, padding: "5px 8px", fontSize: 12, width: "100%", textAlign: "right" }} type="text" inputMode="numeric"
                             value={ef.paidAmount || ""} onChange={e => { const v = parseInt(e.target.value.replace(/\D/g,""),10); setEf("paidAmount", isNaN(v) ? "" : v); }} placeholder="金額" />
@@ -2064,6 +2070,7 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
                         <td style={{ ...td, whiteSpace: "nowrap", color: p.paidDate ? "#1a1a2e" : "#bbb" }}>{parseRocDate(p.paidDate) || "-"}</td>
                         <td style={{ ...td, whiteSpace: "nowrap", color: p.expectedPayDate ? "#1a1a2e" : "#bbb" }}>{p.expectedPayDate || "-"}</td>
                         <td style={td}><Badge status={p._effectiveStatus} /></td>
+                        <td style={{ ...td, fontSize: 12, whiteSpace: "nowrap", color: p.payMethod === "關係人沖帳" ? "#9C27B0" : "#666" }}>{p.payMethod || "-"}</td>
                         <td style={{ ...td, fontWeight: p.paidAmount ? 700 : 400, color: p.paidAmount ? "#2E7D32" : "#bbb", whiteSpace: "nowrap" }}>{p.paidAmount ? fmt(p.paidAmount) : "-"}</td>
                         <td style={{ ...td, color: p.bankFee ? "#E65100" : "#bbb", whiteSpace: "nowrap" }}>{p.bankFee ? fmt(p.bankFee) : "-"}</td>
                         <td style={{ ...td, color: p.commission ? "#E65100" : "#bbb", whiteSpace: "nowrap" }}>{p.commission ? fmt(p.commission) : "-"}</td>
