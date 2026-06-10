@@ -1490,10 +1490,11 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
 
   const saveEdit = async () => {
     const { _effectiveStatus, ...cleanForm } = editForm; // 排除計算屬性
+    const prevSnapshot = projects;
     setProjects(prev => prev.map(p => p.id === editingId ? { ...cleanForm } : p));
     setEditingId(null);
     try { await sb.from("projects").eq("id", cleanForm.id).update(projectToDb(cleanForm)); }
-    catch(err) { console.warn("DB sync failed (saveEdit):", err.message); }
+    catch(err) { alert("⚠️ 儲存失敗，資料未存入！請重試。\n" + err.message); setProjects(prevSnapshot); }
   };
 
   const cancelEdit = () => setEditingId(null);
@@ -1506,12 +1507,8 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
     setIssueModal(null);
     setInvoiceNo("");
     try {
-      const p = updated.find(x => x.id === targetId);
-      if (p) {
-        const { _effectiveStatus, ...clean } = p;
-        await sb.from("projects").eq("id", targetId).update({ status: "已開立", invoice_no: invoiceNo.trim() });
-      }
-    } catch(err) { console.warn("DB sync failed (markIssued):", err.message); }
+      await sb.from("projects").eq("id", targetId).update({ status: "已開立", invoice_no: invoiceNo.trim() });
+    } catch(err) { alert("⚠️ 標記已開立失敗，資料未存入！請重試。\n" + err.message); }
   };
 
   const deleteProject = async (id) => {
@@ -1985,7 +1982,19 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
                             )}
                             {/* 標記已付款：已開立或到期未付款才顯示 */}
                             {(p._effectiveStatus === "已開立" || p._effectiveStatus === "到期未付款") && (
-                              <button onClick={async e => { e.stopPropagation(); const tid=p.id; setProjects(projects.map(x => x.id === tid ? { ...x, status: "已付款" } : x)); try { await sb.from("projects").eq("id", tid).update({ status: "已付款" }); } catch(err) { console.warn("DB sync failed (markPaid):", err.message); } }}
+                              <button onClick={async e => {
+                                e.stopPropagation();
+                                const tid = p.id;
+                                const today = new Date().toISOString().split("T")[0];
+                                const patch = { status: "已付款", paidDate: p.paidDate || today, paidAmount: p.paidAmount || p.taxAmount };
+                                setProjects(projects.map(x => x.id === tid ? { ...x, ...patch } : x));
+                                try {
+                                  await sb.from("projects").eq("id", tid).update({ status: "已付款", paid_date: patch.paidDate, paid_amount: patch.paidAmount });
+                                } catch(err) {
+                                  alert("⚠️ 標記已付款失敗，資料未存入！請重試。\n" + err.message);
+                                  setProjects(projects.map(x => x.id === tid ? p : x));
+                                }
+                              }}
                                 style={{ border: "1px solid #28A745", background: "#EAFBF0", color: "#155724", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" }}>
                                 💰 標記已付款
                               </button>
@@ -2650,24 +2659,7 @@ export default function App() {
     } catch(err) { showToast("❌ 匯出失敗："+err.message,"error"); }
   };
 
-  const setProjectsWithDb = (updaterOrArray) => {
-    if (typeof updaterOrArray === "function") {
-      setProjects(prev => {
-        const next = updaterOrArray(prev);
-        next.forEach(p => {
-          const {_effectiveStatus,...clean} = p;
-          sb.from("projects").eq("id",clean.id).update(projectToDb(clean)).catch(e=>console.warn("DB sync failed",e.message));
-        });
-        return next;
-      });
-    } else {
-      setProjects(updaterOrArray);
-      updaterOrArray.forEach(p => {
-        const {_effectiveStatus,...clean} = p;
-        sb.from("projects").eq("id",clean.id).update(projectToDb(clean)).catch(e=>console.warn("DB sync failed",e.message));
-      });
-    }
-  };
+  const setProjectsWithDb = setProjects;
 
   if (dbError) {
     return (
