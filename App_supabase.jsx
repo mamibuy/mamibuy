@@ -1718,7 +1718,11 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
                         bankFee:prev.bankFee||"", commission:prev.commission||"",
                         commissionNo:prev.commissionNo||"", expenseNo:prev.expenseNo||"",
                         voucherNo:prev.voucherNo||"", payMethod:prev.payMethod||"", amount:prev.amount, taxAmount:prev.taxAmount,
-                        items: prev.items&&prev.items.length>0 ? prev.items.map(i=>({...i})) : [{label:"",qty:1,unitPrice:0,untaxAmt:0,taxAmt:0}],
+                        items: (() => {
+                          if (prev.items&&prev.items.length>0) return prev.items.map(i=>({...i}));
+                          const labels = (prev.title||"").split("、").map(t=>t.trim()).filter(Boolean);
+                          return (labels.length>0?labels:[""]).map(label=>({label,qty:1,unitPrice:0,untaxAmt:0,taxAmt:0}));
+                        })(),
                       }}))}
                         style={{ border:"1px solid #ddd", background:"#F8F9FA", color:"#444", borderRadius:8, padding:"6px 14px", fontSize:13, cursor:"pointer", fontWeight:600 }}>
                         ✏️ 編輯
