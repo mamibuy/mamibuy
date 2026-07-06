@@ -241,6 +241,7 @@ function InvoiceForm({ currentUser, vendors, onSubmit, prefillData, onClearPrefi
   });
   const [showSuggest, setShowSuggest] = useState(false);
   const [vExpanded, setVExpanded] = useState(false);   // 是否展開廠商資料欄位
+  const [otherModal, setOtherModal] = useState(null);  // 「其他」項目自訂輸入視窗 { index, text }
 
   useEffect(() => {
     if (!prefillData) return;
@@ -315,6 +316,17 @@ function InvoiceForm({ currentUser, vendors, onSubmit, prefillData, onClearPrefi
     setForm({ ...form, items });
   };
 
+  const handleItemLabelChange = (i, val) => {
+    if (val === "其他") { setOtherModal({ index: i, text: "" }); return; }
+    updateItem(i, "label", val);
+  };
+
+  const confirmOtherItem = () => {
+    const text = otherModal.text.trim();
+    if (text) updateItem(otherModal.index, "label", text);
+    setOtherModal(null);
+  };
+
   const total = form.items.reduce((s, i) => s + (i.taxAmt || 0), 0);
 
   return (
@@ -364,9 +376,11 @@ function InvoiceForm({ currentUser, vendors, onSubmit, prefillData, onClearPrefi
         <h3 style={sectionTitle}>開立項目</h3>
         {form.items.map((item, i) => (
           <div key={i} style={{ display: "grid", gridTemplateColumns: "2fr 80px 120px 120px 120px 36px", gap: 8, marginBottom: 8, alignItems: "center" }}>
-            <select style={inp} value={item.label} onChange={e => updateItem(i, "label", e.target.value)}>
+            <select style={inp} value={item.label} onChange={e => handleItemLabelChange(i, e.target.value)}>
               <option value="">選擇項目</option>
               {ITEMS_CATALOG.map(c => <option key={c.label}>{c.label}</option>)}
+              {item.label && !ITEMS_CATALOG.some(c => c.label === item.label) && <option value={item.label}>{item.label}（自訂）</option>}
+              <option value="其他">其他</option>
             </select>
             <input style={{ ...inp, textAlign: "center" }} type="text" inputMode="numeric" value={item.qty || ""} onChange={e => { const v = parseInt(e.target.value.replace(/\D/g,""),10); updateItem(i, "qty", isNaN(v) ? 0 : v); }} placeholder="數量" />
             <input style={{ ...inp, textAlign: "right" }} type="text" inputMode="numeric" value={item.unitPrice || ""} onChange={e => { const v = parseInt(e.target.value.replace(/\D/g,""),10); updateItem(i, "unitPrice", isNaN(v) ? 0 : v); }} placeholder="單價" />
@@ -497,6 +511,22 @@ function InvoiceForm({ currentUser, vendors, onSubmit, prefillData, onClearPrefi
         style={{ width: "100%", padding: "14px", background: "linear-gradient(135deg,#1a1a2e,#16213e)", color: "#fff", border: "none", borderRadius: 12, fontSize: 16, fontWeight: 700, cursor: "pointer" }}>
         提交申請 →
       </button>
+
+      {otherModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center" }}
+          onClick={e => { if (e.target === e.currentTarget) setOtherModal(null); }}>
+          <div style={{ background: "#fff", borderRadius: 16, padding: 24, width: 340, maxWidth: "90vw", boxShadow: "0 8px 40px rgba(0,0,0,0.2)" }}>
+            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 12, color: "#1a1a2e" }}>輸入自訂項目名稱</div>
+            <input autoFocus style={inp} value={otherModal.text} placeholder="請輸入項目名稱"
+              onChange={e => setOtherModal({ ...otherModal, text: e.target.value })}
+              onKeyDown={e => { if (e.key === "Enter") confirmOtherItem(); }} />
+            <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+              <button onClick={() => setOtherModal(null)} style={{ border: "1px solid #ddd", background: "#fff", color: "#666", borderRadius: 8, padding: "8px 16px", fontSize: 13, cursor: "pointer" }}>取消</button>
+              <button onClick={confirmOtherItem} style={{ border: "none", background: "#1a1a2e", color: "#fff", borderRadius: 8, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>確認</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1770,6 +1800,7 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
                           <select style={{ ...inp, flex:2, padding:"5px 8px", fontSize:13 }} value={it.label||""} onChange={e=>updateItem(i,"label",e.target.value)}>
                             <option value="">選擇品項</option>
                             {ITEMS_CATALOG.map(c=><option key={c.label} value={c.label}>{c.label}</option>)}
+                            {it.label && !ITEMS_CATALOG.some(c=>c.label===it.label) && <option value={it.label}>{it.label}（自訂）</option>}
                           </select>
                           <button onClick={()=>{ const items=editItems.filter((_,j)=>j!==i); const tt=items.reduce((s,x)=>s+(x.taxAmt||0),0); const tu=items.reduce((s,x)=>s+(x.untaxAmt||0),0); setEf2("items",items); setEf2("taxAmount",tt); setEf2("amount",tu); }}
                             style={{ border:"none", background:"#fee", color:"#c33", borderRadius:6, padding:"5px 10px", cursor:"pointer", fontSize:14, flexShrink:0 }}>×</button>
