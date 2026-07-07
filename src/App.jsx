@@ -185,7 +185,7 @@ const ITEMS_CATALOG = [
 const COMPANIES = ["紳太","匯太","和和研"];
 const ROLES = {applicant:"申請者",manager:"公司主管",finance:"財務部",admin:"管理員",clerk:"行政"};
 const ROLE_PERMS = {
-  applicant: ["invoice-form"],
+  applicant: ["invoice-form","projects"],
   clerk:     ["invoice-form","projects"],
   manager:   ["dashboard","invoice-form","projects","vendors"],
   finance:   ["dashboard","invoice-form","projects","csv"],
