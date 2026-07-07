@@ -679,9 +679,13 @@ function Dashboard({ projects, currentUser }) {
                   <span style={{ fontWeight: 600, color: "#1a1a2e" }}>{p.title}</span>
                   <span style={{ marginLeft: 10, fontSize: 12, color: "#888" }}>
                     {p.company} · {p.applicant} · {p.invoiceDate}
-                    {p.expectedPayDate && <span style={{ color: es === "到期未付款" ? "#DC3545" : "#aaa", marginLeft: 6 }}>
-                      （預計收款：{p.expectedPayDate}）
-                    </span>}
+                    {p.payMethod === "關係人沖帳" ? (
+                      <span style={{ color: "#9C27B0", marginLeft: 6 }}>（預計收款：關係人沖帳）</span>
+                    ) : p.expectedPayDate && (
+                      <span style={{ color: es === "到期未付款" ? "#DC3545" : "#aaa", marginLeft: 6 }}>
+                        （預計收款：{p.expectedPayDate}）
+                      </span>
+                    )}
                   </span>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -1865,7 +1869,7 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
                     <ERow label="付款狀態" field="status" options={["申請中","已開立","到期未付款","已付款"]}/>
                   </> : <>
                     <Row label="發票號碼" value={dm.invoiceNo} mono/><Row label="傳票號碼" value={dm.voucherNo} mono/>
-                    <Row label="發票日期" value={dm.invoiceDate}/><Row label="預計收款日" value={dm.expectedPayDate}/>
+                    <Row label="發票日期" value={dm.invoiceDate}/><Row label="預計收款日" value={dm.payMethod==="關係人沖帳"?"關係人沖帳":dm.expectedPayDate}/>
                   </>}
                 </Section>
                 <Section title="付款資訊" color="#F57C00">
@@ -1875,7 +1879,7 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
                     <ERow label="說明" field="commissionNo"/><ERow label="支出申請單" field="expenseNo"/>
                   </> : <>
                     <Row label="已收款金額" value={dm.payMethod==="關係人沖帳" ? "關係人沖帳" : (dm.paidAmount?`NT$ ${dm.paidAmount.toLocaleString()}`:null)}/>
-                    <Row label="實際收款日" value={dm.paidDate}/><Row label="手續費" value={dm.bankFee?`NT$ ${dm.bankFee.toLocaleString()}`:null}/>
+                    <Row label="實際收款日" value={dm.payMethod==="關係人沖帳"?"關係人沖帳":dm.paidDate}/><Row label="手續費" value={dm.bankFee?`NT$ ${dm.bankFee.toLocaleString()}`:null}/>
                     <Row label="佣金" value={dm.commission?`NT$ ${dm.commission.toLocaleString()}`:null}/>
                     <Row label="說明" value={dm.commissionNo}/><Row label="支出申請單" value={dm.expenseNo} mono/>
                   </>}
@@ -2111,8 +2115,8 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
                         <td style={{ ...td, fontSize: 12, whiteSpace: "nowrap", color: "#666" }}>{p.taxId || "-"}</td>
                         <td style={{ ...td, whiteSpace: "nowrap" }}>{p.invoiceDate || "-"}</td>
                         <td style={{ ...td, fontSize: 12, fontFamily: "monospace", color: p.invoiceNo ? "#1a1a2e" : "#bbb" }}>{p.invoiceNo || "-"}</td>
-                        <td style={{ ...td, whiteSpace: "nowrap", color: p.paidDate ? "#1a1a2e" : "#bbb" }}>{parseRocDate(p.paidDate) || "-"}</td>
-                        <td style={{ ...td, whiteSpace: "nowrap", color: p.expectedPayDate ? "#1a1a2e" : "#bbb" }}>{p.expectedPayDate || "-"}</td>
+                        <td style={{ ...td, whiteSpace: "nowrap", color: p.payMethod === "關係人沖帳" ? "#9C27B0" : (p.paidDate ? "#1a1a2e" : "#bbb") }}>{p.payMethod === "關係人沖帳" ? "關係人沖帳" : (parseRocDate(p.paidDate) || "-")}</td>
+                        <td style={{ ...td, whiteSpace: "nowrap", color: p.payMethod === "關係人沖帳" ? "#9C27B0" : (p.expectedPayDate ? "#1a1a2e" : "#bbb") }}>{p.payMethod === "關係人沖帳" ? "關係人沖帳" : (p.expectedPayDate || "-")}</td>
                         <td style={td}><Badge status={p._effectiveStatus} /></td>
                         <td style={{ ...td, fontSize: 12, whiteSpace: "nowrap", color: p.payMethod === "關係人沖帳" ? "#9C27B0" : "#666" }}>{p.payMethod || "-"}</td>
                         <td style={{ ...td, fontWeight: p.paidAmount ? 700 : 400, color: p.payMethod === "關係人沖帳" ? "#9C27B0" : (p.paidAmount ? "#2E7D32" : "#bbb"), whiteSpace: "nowrap" }}>{p.payMethod === "關係人沖帳" ? "關係人沖帳" : (p.paidAmount ? fmt(p.paidAmount) : "-")}</td>
@@ -2793,12 +2797,12 @@ export default function App() {
         "申請人":p.applicant,"公司":p.company,"專案名稱":p.title,
         "委刊單編號":p.orderNo||"","公司抬頭":p.clientTitle||"",
         "統一編號":p.taxId||"","未稅金額":p.amount,"含稅金額":p.taxAmount,
-        "發票日期":p.invoiceDate||"","預計收款日":p.expectedPayDate||"",
+        "發票日期":p.invoiceDate||"","預計收款日":p.payMethod==="關係人沖帳"?"關係人沖帳":(p.expectedPayDate||""),
         "發票號碼":p.invoiceNo||"",
         "廠商名稱":vendors.find(v=>v.id===p.vendorId)?.name||"",
         "廠商帳號":vendors.find(v=>v.id===p.vendorId)?.account||"",
         "狀態":p._effectiveStatus,"已收款金額":p.payMethod==="關係人沖帳"?"關係人沖帳":(p.paidAmount||""),
-        "入帳日":p.paidDate||"","手續費":p.bankFee||"",
+        "入帳日":p.payMethod==="關係人沖帳"?"關係人沖帳":(p.paidDate||""),"手續費":p.bankFee||"",
         "佣金":p.commission||"","說明":p.commissionNo||"",
         "支出申請單編號":p.expenseNo||"","傳票號碼":p.voucherNo||"",
       }));
