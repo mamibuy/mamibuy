@@ -183,7 +183,15 @@ const ITEMS_CATALOG = [
   {label:"訂閱收入"},{label:"單次購買收入"},{label:"授權費"},{label:"團購分潤"},{label:"代收代付"},
 ];
 const COMPANIES = ["紳太","匯太","和和研"];
-const ROLES = {applicant:"申請者",manager:"公司主管",finance:"財務部",admin:"管理員"};
+const ROLES = {applicant:"申請者",manager:"公司主管",finance:"財務部",admin:"管理員",clerk:"行政"};
+const ROLE_PERMS = {
+  applicant: ["invoice-form"],
+  clerk:     ["invoice-form","projects"],
+  manager:   ["dashboard","invoice-form","projects","vendors"],
+  finance:   ["dashboard","invoice-form","projects","csv"],
+  admin:     ["dashboard","invoice-form","projects","vendors","csv","users"],
+};
+const defaultPageFor = (role) => ROLE_PERMS[role]?.includes("dashboard") ? "dashboard" : (ROLE_PERMS[role]?.[0] || "dashboard");
 const STATUS_COLOR = {
   "申請中":     {bg:"#FFF3CD",text:"#856404",dot:"#FFC107"},
   "已開立":     {bg:"#CCE5FF",text:"#004085",dot:"#007BFF"},
@@ -1555,6 +1563,7 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
   const visible = projects.filter(p => {
     if (currentUser.role === "admin" || currentUser.role === "finance") return true;
     if (currentUser.role === "manager") return p.company === currentUser.company;
+    if (currentUser.role === "clerk") return ["申請中","已開立"].includes(p._effectiveStatus);
     return p.applicant === currentUser.name;
   });
 
@@ -1964,7 +1973,7 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
         <div style={{ display: "flex", gap: 10 }}>
           <select style={{ ...inp, width: "auto" }} value={filter} onChange={e => setFilter(e.target.value)}>
             <option value="">全部狀態</option>
-            {Object.keys(STATUS_COLOR).map(s => <option key={s}>{s}</option>)}
+            {(currentUser.role === "clerk" ? ["申請中","已開立"] : Object.keys(STATUS_COLOR)).map(s => <option key={s}>{s}</option>)}
           </select>
           {(currentUser.role === "finance" || currentUser.role === "admin") &&
             <button onClick={onExport} style={{ border: "none", background: "#1a1a2e", color: "#fff", padding: "10px 18px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>
@@ -2740,7 +2749,7 @@ export default function App() {
     if (found.password && found.password !== loginPw) { setLoginError("密碼錯誤，請重新輸入"); return; }
     setCurrentUser(found);
     setLoginError(""); setLoginName(""); setLoginPw("");
-    setPage("dashboard");
+    setPage(defaultPageFor(found.role));
   };
   const handleLogout = () => { setCurrentUser(null); setPage("dashboard"); };
 
@@ -2899,18 +2908,13 @@ export default function App() {
     );
   }
 
-  const canAccess = (p) => {
-    const perms = {dashboard:true,"invoice-form":true,projects:true,vendors:true,
-      csv: currentUser.role==="finance"||currentUser.role==="admin",
-      users: currentUser.role==="admin"};
-    return perms[p]!==false;
-  };
-  const navItems = [
+  const canAccess = (p) => (ROLE_PERMS[currentUser.role] || []).includes(p);
+  const ALL_NAV = [
     {id:"dashboard",label:"儀表板",icon:"📊"},{id:"invoice-form",label:"申請發票",icon:"📄"},
     {id:"projects",label:"進度",icon:"🧾"},{id:"vendors",label:"廠商管理",icon:"🏢"},
-    ...(canAccess("csv")?[{id:"csv",label:"銀行對賬",icon:"🏦"}]:[]),
-    ...(canAccess("users")?[{id:"users",label:"帳號管理",icon:"👥"}]:[]),
+    {id:"csv",label:"銀行對賬",icon:"🏦"},{id:"users",label:"帳號管理",icon:"👥"},
   ];
+  const navItems = ALL_NAV.filter(item => canAccess(item.id));
 
   return (
     <div style={{minHeight:"100vh",background:"#F5F6FA",fontFamily:"'Noto Sans TC','Microsoft JhengHei',sans-serif"}}>
@@ -2942,7 +2946,7 @@ export default function App() {
           <span style={{fontSize:18,fontWeight:900,letterSpacing:-0.5,color:"#fff"}}>媽咪拜</span>
           <div style={{display:"flex",gap:4,marginLeft:8}}>
             {Object.values(THEMES).map(t=>(
-              <button key={t.id} onClick={()=>{setTheme(t.id);setPage("dashboard");}}
+              <button key={t.id} onClick={()=>{setTheme(t.id);setPage(defaultPageFor(currentUser.role));}}
                 style={{padding:"3px 10px",borderRadius:20,border:"none",cursor:"pointer",fontSize:12,fontWeight:600,background:theme===t.id?"#fff":"#ffffff33",color:theme===t.id?THEMES[theme].color:"#fff",transition:"all 0.2s"}}>
                 {t.icon} {t.label}
               </button>
@@ -2973,12 +2977,12 @@ export default function App() {
             <HsinchuApp currentUser={currentUser}/>
           ):(
             <>
-              {page==="dashboard"    &&<Dashboard projects={projectsWithStatus} currentUser={currentUser}/>}
-              {page==="invoice-form" &&<InvoiceForm currentUser={currentUser} vendors={vendors} onSubmit={handleSubmit} prefillData={prefillData} onClearPrefill={()=>setPrefillData(null)}/>}
-              {page==="projects"     &&<ProjectList projects={projectsWithStatus} setProjects={setProjectsWithDb} vendors={vendors} currentUser={currentUser} users={users} onExport={handleExport} onCopyProject={p=>{ setPrefillData(p); setPage("invoice-form"); }}/>}
-              {page==="vendors"      &&<VendorManagement vendors={vendors} setVendors={setVendors} canEdit={currentUser.role==="finance"||currentUser.role==="admin"}/>}
-              {page==="csv"          &&canAccess("csv")&&<CSVReconcile projects={projectsWithStatus} vendors={vendors} setProjects={setProjectsWithDb}/>}
-              {page==="users"        &&canAccess("users")&&<UserManagement users={users} setUsers={setUsers}/>}
+              {page==="dashboard"    &&canAccess("dashboard")   &&<Dashboard projects={projectsWithStatus} currentUser={currentUser}/>}
+              {page==="invoice-form" &&canAccess("invoice-form")&&<InvoiceForm currentUser={currentUser} vendors={vendors} onSubmit={handleSubmit} prefillData={prefillData} onClearPrefill={()=>setPrefillData(null)}/>}
+              {page==="projects"     &&canAccess("projects")    &&<ProjectList projects={projectsWithStatus} setProjects={setProjectsWithDb} vendors={vendors} currentUser={currentUser} users={users} onExport={handleExport} onCopyProject={p=>{ setPrefillData(p); setPage("invoice-form"); }}/>}
+              {page==="vendors"      &&canAccess("vendors")     &&<VendorManagement vendors={vendors} setVendors={setVendors} canEdit={currentUser.role==="finance"||currentUser.role==="admin"}/>}
+              {page==="csv"          &&canAccess("csv")         &&<CSVReconcile projects={projectsWithStatus} vendors={vendors} setProjects={setProjectsWithDb}/>}
+              {page==="users"        &&canAccess("users")       &&<UserManagement users={users} setUsers={setUsers}/>}
             </>
           )}
         </div>
@@ -2986,7 +2990,7 @@ export default function App() {
       <div className="sidebar-mobile" style={{position:"fixed",bottom:0,left:0,right:0,zIndex:99,background:"#fff",borderTop:"1px solid #F0F0F0",flexDirection:"column",paddingBottom:"env(safe-area-inset-bottom,0px)",boxShadow:"0 -2px 12px rgba(0,0,0,0.06)"}}>
         <div style={{display:"flex",borderBottom:"1px solid #F0F0F0"}}>
           {Object.values(THEMES).map(t=>(
-            <button key={t.id} onClick={()=>{setTheme(t.id);setPage("dashboard");}}
+            <button key={t.id} onClick={()=>{setTheme(t.id);setPage(defaultPageFor(currentUser.role));}}
               style={{flex:1,padding:"6px 4px",border:"none",cursor:"pointer",fontSize:11,fontWeight:600,background:theme===t.id?`${t.color}18`:"#fff",color:theme===t.id?t.color:"#aaa",borderBottom:theme===t.id?`2px solid ${t.color}`:"2px solid transparent"}}>
               {t.icon} {t.label}
             </button>
