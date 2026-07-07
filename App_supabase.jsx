@@ -189,6 +189,7 @@ const STATUS_COLOR = {
   "已開立":     {bg:"#CCE5FF",text:"#004085",dot:"#007BFF"},
   "到期未付款": {bg:"#F8D7DA",text:"#721C24",dot:"#DC3545"},
   "已付款":     {bg:"#D4EDDA",text:"#155724",dot:"#28A745"},
+  "關係人沖帳": {bg:"#F3E5F5",text:"#6A1B9A",dot:"#9C27B0"},
 };
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -356,8 +357,11 @@ function InvoiceForm({ currentUser, vendors, onSubmit, prefillData, onClearPrefi
             <input style={inp} value={form.taxId} onChange={e => setForm({ ...form, taxId: e.target.value })} placeholder="8碼統編，自然人免填" maxLength={8} />
           </div>
           <div style={field}>
-            <label style={lbl}>預計收款日</label>
-            <input style={inp} type="date" value={form.expectedPayDate} onChange={e => setForm({ ...form, expectedPayDate: e.target.value })} />
+            <label style={lbl}>預計收款日{form.payMethod === "關係人沖帳" && <span style={{ color: "#aaa", fontWeight: 400 }}>（免填）</span>}</label>
+            <input style={{ ...inp, ...(form.payMethod === "關係人沖帳" ? { background: "#F5F5F5", color: "#aaa" } : {}) }} type="date"
+              value={form.payMethod === "關係人沖帳" ? "" : form.expectedPayDate}
+              disabled={form.payMethod === "關係人沖帳"}
+              onChange={e => setForm({ ...form, expectedPayDate: e.target.value })} />
           </div>
           <div style={field}>
             <label style={lbl}>委刊單編號/其他備註</label>
@@ -666,8 +670,8 @@ function Dashboard({ projects, currentUser }) {
         {filtered.length === 0 && <div style={{ color: "#aaa", textAlign: "center", padding: 32 }}>此月份無資料</div>}
         {filtered.map(p => {
           const es = p._effectiveStatus;
-          const pct = es === "已付款" ? 100 : es === "到期未付款" ? 66 : es === "已開立" ? 66 : es === "申請中" ? 33 : 10;
-          const colors = { "申請中": "#FF9800", "已開立": "#2196F3", "到期未付款": "#DC3545", "已付款": "#28A745" };
+          const pct = es === "已付款" ? 100 : es === "關係人沖帳" ? 100 : es === "到期未付款" ? 66 : es === "已開立" ? 66 : es === "申請中" ? 33 : 10;
+          const colors = { "申請中": "#FF9800", "已開立": "#2196F3", "到期未付款": "#DC3545", "已付款": "#28A745", "關係人沖帳": "#9C27B0" };
           return (
             <div key={p.id} style={{ marginBottom: 20, paddingBottom: 20, borderBottom: "1px solid #F0F0F0" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -1685,17 +1689,18 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
             {children}
           </div>
         );
-        const ERow = ({label, field, type="text", options}) => (
+        const ERow = ({label, field, type="text", options, disabled, hint}) => (
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 0", borderBottom:"1px solid #F0F0F0", gap:12 }}>
-            <span style={{ fontSize:13, color:"#888", whiteSpace:"nowrap", flexShrink:0, width:90 }}>{label}</span>
+            <span style={{ fontSize:13, color:"#888", whiteSpace:"nowrap", flexShrink:0, width:90 }}>{label}{hint && <span style={{ color:"#bbb", fontWeight:400 }}>{hint}</span>}</span>
             {options ? (
-              <select style={{ ...inp, padding:"4px 8px", fontSize:13, flex:1 }} value={ef2[field]||""} onChange={e=>setEf2(field,e.target.value)}>
+              <select style={{ ...inp, padding:"4px 8px", fontSize:13, flex:1 }} value={ef2[field]||""} onChange={e=>setEf2(field,e.target.value)} disabled={disabled}>
                 {options.map(o=><option key={o}>{o}</option>)}
               </select>
             ) : (
-              <input style={{ ...inp, padding:"4px 8px", fontSize:13, flex:1, textAlign:type==="number"?"right":"left" }}
+              <input style={{ ...inp, padding:"4px 8px", fontSize:13, flex:1, textAlign:type==="number"?"right":"left", ...(disabled?{background:"#F5F5F5",color:"#aaa"}:{}) }}
                 type={type==="number"?"text":type} inputMode={type==="number"?"numeric":undefined}
-                value={ef2[field]??""} onChange={e=>{ if(type==="number"){ const v=parseInt(e.target.value.replace(/\D/g,""),10); setEf2(field,isNaN(v)?"":v); } else { setEf2(field,e.target.value); } }}
+                value={disabled?"":(ef2[field]??"")} onChange={e=>{ if(type==="number"){ const v=parseInt(e.target.value.replace(/\D/g,""),10); setEf2(field,isNaN(v)?"":v); } else { setEf2(field,e.target.value); } }}
+                disabled={disabled}
               />
             )}
           </div>
@@ -1855,7 +1860,8 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
                 <Section title="發票資訊" color="#43A047">
                   {isEditingModal ? <>
                     <ERow label="發票號碼" field="invoiceNo"/><ERow label="傳票號碼" field="voucherNo"/>
-                    <ERow label="發票日期" field="invoiceDate" type="date"/><ERow label="預計收款日" field="expectedPayDate" type="date"/>
+                    <ERow label="發票日期" field="invoiceDate" type="date"/>
+                    <ERow label="預計收款日" field="expectedPayDate" type="date" disabled={ef2.payMethod==="關係人沖帳"} hint={ef2.payMethod==="關係人沖帳"?"（免填）":undefined}/>
                     <ERow label="付款狀態" field="status" options={["申請中","已開立","到期未付款","已付款"]}/>
                   </> : <>
                     <Row label="發票號碼" value={dm.invoiceNo} mono/><Row label="傳票號碼" value={dm.voucherNo} mono/>
@@ -1868,7 +1874,7 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
                     <ERow label="手續費" field="bankFee" type="number"/><ERow label="佣金" field="commission" type="number"/>
                     <ERow label="說明" field="commissionNo"/><ERow label="支出申請單" field="expenseNo"/>
                   </> : <>
-                    <Row label="已收款金額" value={dm.paidAmount?`NT$ ${dm.paidAmount.toLocaleString()}`:null}/>
+                    <Row label="已收款金額" value={dm.payMethod==="關係人沖帳" ? "關係人沖帳" : (dm.paidAmount?`NT$ ${dm.paidAmount.toLocaleString()}`:null)}/>
                     <Row label="實際收款日" value={dm.paidDate}/><Row label="手續費" value={dm.bankFee?`NT$ ${dm.bankFee.toLocaleString()}`:null}/>
                     <Row label="佣金" value={dm.commission?`NT$ ${dm.commission.toLocaleString()}`:null}/>
                     <Row label="說明" value={dm.commissionNo}/><Row label="支出申請單" value={dm.expenseNo} mono/>
@@ -2046,7 +2052,10 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
                           <input style={{ ...inp, padding: "5px 8px", fontSize: 12, width: "100%" }} type="date" value={ef.paidDate || ""} onChange={e => setEf("paidDate", e.target.value)} />
                         </td>
                         <td style={{ ...td, width: 100, minWidth: 100 }}>
-                          <input style={{ ...inp, padding: "5px 8px", fontSize: 12, width: "100%" }} type="date" value={ef.expectedPayDate || ""} onChange={e => setEf("expectedPayDate", e.target.value)} />
+                          <input style={{ ...inp, padding: "5px 8px", fontSize: 12, width: "100%", ...(ef.payMethod === "關係人沖帳" ? { background: "#F5F5F5", color: "#aaa" } : {}) }} type="date"
+                            value={ef.payMethod === "關係人沖帳" ? "" : (ef.expectedPayDate || "")}
+                            disabled={ef.payMethod === "關係人沖帳"}
+                            onChange={e => setEf("expectedPayDate", e.target.value)} />
                         </td>
                         <td style={{ ...td, width: 120, minWidth: 120 }}>
                           <select style={{ ...inp, padding: "5px 8px", fontSize: 12, width: "100%" }} value={ef.status} onChange={e => setEf("status", e.target.value)}>
@@ -2106,7 +2115,7 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
                         <td style={{ ...td, whiteSpace: "nowrap", color: p.expectedPayDate ? "#1a1a2e" : "#bbb" }}>{p.expectedPayDate || "-"}</td>
                         <td style={td}><Badge status={p._effectiveStatus} /></td>
                         <td style={{ ...td, fontSize: 12, whiteSpace: "nowrap", color: p.payMethod === "關係人沖帳" ? "#9C27B0" : "#666" }}>{p.payMethod || "-"}</td>
-                        <td style={{ ...td, fontWeight: p.paidAmount ? 700 : 400, color: p.paidAmount ? "#2E7D32" : "#bbb", whiteSpace: "nowrap" }}>{p.paidAmount ? fmt(p.paidAmount) : "-"}</td>
+                        <td style={{ ...td, fontWeight: p.paidAmount ? 700 : 400, color: p.payMethod === "關係人沖帳" ? "#9C27B0" : (p.paidAmount ? "#2E7D32" : "#bbb"), whiteSpace: "nowrap" }}>{p.payMethod === "關係人沖帳" ? "關係人沖帳" : (p.paidAmount ? fmt(p.paidAmount) : "-")}</td>
                         <td style={{ ...td, color: p.bankFee ? "#E65100" : "#bbb", whiteSpace: "nowrap" }}>{p.bankFee ? fmt(p.bankFee) : "-"}</td>
                         <td style={{ ...td, color: p.commission ? "#E65100" : "#bbb", whiteSpace: "nowrap" }}>{p.commission ? fmt(p.commission) : "-"}</td>
                         <td style={{ ...td, fontSize: 12, color: p.commissionNo ? "#1a1a2e" : "#bbb" }}>{p.commissionNo || "-"}</td>
@@ -2716,6 +2725,7 @@ export default function App() {
   const handleLogout = () => { setCurrentUser(null); setPage("dashboard"); };
 
   const effectiveStatus = (p) => {
+    if (p.payMethod === "關係人沖帳") return "關係人沖帳";
     if (p.status === "已開立" && p.expectedPayDate) {
       const today = new Date(); today.setHours(0,0,0,0);
       if (new Date(p.expectedPayDate) < today) return "到期未付款";
@@ -2787,7 +2797,7 @@ export default function App() {
         "發票號碼":p.invoiceNo||"",
         "廠商名稱":vendors.find(v=>v.id===p.vendorId)?.name||"",
         "廠商帳號":vendors.find(v=>v.id===p.vendorId)?.account||"",
-        "狀態":p._effectiveStatus,"已收款金額":p.paidAmount||"",
+        "狀態":p._effectiveStatus,"已收款金額":p.payMethod==="關係人沖帳"?"關係人沖帳":(p.paidAmount||""),
         "入帳日":p.paidDate||"","手續費":p.bankFee||"",
         "佣金":p.commission||"","說明":p.commissionNo||"",
         "支出申請單編號":p.expenseNo||"","傳票號碼":p.voucherNo||"",
