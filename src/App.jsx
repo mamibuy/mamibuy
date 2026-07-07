@@ -2207,18 +2207,28 @@ function UserManagement({ users, setUsers }) {
     setForm({ name: u.name, email: u.email, role: u.role, company: u.company, active: u.active, password: u.password || "" });
     setShowForm(true);
   };
-  const save = () => {
-    if (editingId !== null) {
-      setUsers(users.map(u => u.id === editingId ? { ...u, ...form } : u));
-    } else {
-      setUsers([...users, { id: Date.now(), ...form }]);
-    }
-    setShowForm(false); setEditingId(null); setForm(emptyForm);
+  const save = async () => {
+    try {
+      if (editingId !== null) {
+        const payload = { name: form.name, email: form.email, role: form.role, company: form.company, active: form.active };
+        if (form.password.trim()) payload.password = form.password.trim();
+        await sb.from("users").eq("id", editingId).update(payload);
+        setUsers(users.map(u => u.id === editingId ? { ...u, ...payload } : u));
+      } else {
+        const payload = { name: form.name, email: form.email, role: form.role, company: form.company, active: form.active, password: form.password.trim() || null };
+        const [created] = await sb.from("users").insert(payload);
+        setUsers([...users, dbToUser(created)]);
+      }
+      setShowForm(false); setEditingId(null); setForm(emptyForm);
+    } catch (err) { alert("儲存失敗：" + err.message); }
   };
-  const savePw = () => {
+  const savePw = async () => {
     if (!newPw.trim()) return;
-    setUsers(users.map(u => u.id === pwModal.userId ? { ...u, password: newPw.trim() } : u));
-    setPwModal(null); setNewPw(""); setShowPw(false);
+    try {
+      await sb.from("users").eq("id", pwModal.userId).update({ password: newPw.trim() });
+      setUsers(users.map(u => u.id === pwModal.userId ? { ...u, password: newPw.trim() } : u));
+      setPwModal(null); setNewPw(""); setShowPw(false);
+    } catch (err) { alert("密碼更新失敗：" + err.message); }
   };
 
   return (
@@ -2336,7 +2346,13 @@ function UserManagement({ users, setUsers }) {
                       style={{ border: "1px solid #C8DCF7", background: "#EBF5FF", color: "#0056b3", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>
                       🔑 密碼
                     </button>
-                    <button onClick={() => setUsers(users.map((x, j) => j === i ? { ...x, active: !x.active } : x))}
+                    <button onClick={async () => {
+                      const nextActive = !u.active;
+                      try {
+                        await sb.from("users").eq("id", u.id).update({ active: nextActive });
+                        setUsers(users.map((x, j) => j === i ? { ...x, active: nextActive } : x));
+                      } catch (err) { alert("更新失敗：" + err.message); }
+                    }}
                       style={{ border: `1px solid ${u.active ? "#fcc" : "#c8e6c9"}`, background: u.active ? "#fff5f5" : "#f0fff4", color: u.active ? "#c33" : "#2E7D32", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>
                       {u.active ? "停用" : "啟用"}
                     </button>
