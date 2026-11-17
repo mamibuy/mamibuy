@@ -80,3 +80,13 @@ create table if not exists public.reconcile_rows (
   match_client_title text,
   match_order_no     text
 );
+
+-- 模擬正式環境現況（2026-11-17 查到）：RLS 開著，但每張表都有 anon 全開政策；另有 users.created_at
+alter table public.users add column if not exists created_at timestamptz default now();
+do $$ declare t text; begin
+  foreach t in array array['users','vendors','projects','reconcile_batches','reconcile_rows'] loop
+    execute format('alter table public.%I enable row level security', t);
+    execute format('drop policy if exists allow_all_%s on public.%I', t, t);
+    execute format('create policy allow_all_%s on public.%I for all to anon using (true) with check (true)', t, t);
+  end loop;
+end $$;

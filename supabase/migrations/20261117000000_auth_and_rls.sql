@@ -56,6 +56,13 @@ alter table public.projects          enable row level security;
 alter table public.reconcile_batches enable row level security;
 alter table public.reconcile_rows    enable row level security;
 
+-- 正式環境原本的「anon 全開」政策（allow_all_*，USING true）一律移除
+drop policy if exists allow_all_users             on public.users;
+drop policy if exists allow_all_vendors           on public.vendors;
+drop policy if exists allow_all_projects          on public.projects;
+drop policy if exists allow_all_reconcile_batches on public.reconcile_batches;
+drop policy if exists allow_all_reconcile_rows    on public.reconcile_rows;
+
 -- ── 4. users：自己看得到自己；admin／finance 看得到全部（進度頁編輯申請人要名單）
 drop policy if exists users_select on public.users;
 create policy users_select on public.users for select to authenticated
