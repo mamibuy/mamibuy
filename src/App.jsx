@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
+import { createClient } from "@supabase/supabase-js";
 
 // ─── 新竹模組共用常數（HsinchuApp 使用）─────────────────────────────────────
 const _inp={border:"1.5px solid #E8E8E8",borderRadius:8,padding:"9px 12px",fontSize:14,color:"#1a1a2e",outline:"none",width:"100%",boxSizing:"border-box",background:"#fff"};
@@ -93,8 +94,33 @@ const THEMES = {
 };
 
 // ─── Supabase 設定 ────────────────────────────────────────────────────────────
-const SUPABASE_URL = "https://kyzyozfdjqlhpcxtzzfp.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5enlvemZkanFsaHBjeHR6emZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3NjU5OTAsImV4cCI6MjA5MDM0MTk5MH0.CEiFol3JeQLJekoKOceJhJYbUlGsGuc0UDpOG78Ru3Y";
+// anon key 是公開金鑰，可以放前端；真正的權限由資料庫 RLS 依登入者身分把關。
+// 本機測試可用 .env.local 的 VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY 覆寫。
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "https://kyzyozfdjqlhpcxtzzfp.supabase.co";
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5enlvemZkanFsaHBjeHR6emZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3NjU5OTAsImV4cCI6MjA5MDM0MTk5MH0.CEiFol3JeQLJekoKOceJhJYbUlGsGuc0UDpOG78Ru3Y";
+// 信件連結（重設密碼／邀請）進來時網址帶 type=recovery|invite；要在 supabase-js 清掉網址前先記下
+const ARRIVED_FROM_EMAIL_LINK = /type=(recovery|invite)/.test(window.location.hash + window.location.search);
+const supa = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+});
+// 目前登入者的 access token（沒登入就用 anon key → RLS 什麼都不給）
+const authHeaders = async () => {
+  const { data } = await supa.auth.getSession();
+  const token = data?.session?.access_token || SUPABASE_ANON_KEY;
+  return { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${token}` };
+};
+// 帳號管理（需要 service role 的動作）→ Edge Function admin-users
+const adminUsers = async (action, payload = {}) => {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-users`, {
+    method: "POST",
+    headers: { ...(await authHeaders()), "Content-Type": "application/json" },
+    body: JSON.stringify({ action, redirectTo: window.location.origin + window.location.pathname, ...payload }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+  return data;
+};
+const USER_COLS = "id,auth_id,name,email,role,company,active";
 
 const sb = {
   from: (table) => ({
@@ -110,7 +136,7 @@ const sb = {
       if(params.length) url+="?"+params.join("&");
       const res=await fetch(url,{
         method,
-        headers:{"apikey":SUPABASE_ANON_KEY,"Authorization":`Bearer ${SUPABASE_ANON_KEY}`,"Content-Type":"application/json","Prefer":"return=representation"},
+        headers:{...(await authHeaders()),"Content-Type":"application/json","Prefer":"return=representation"},
         ...(body!==undefined?{body:JSON.stringify(body)}:{}),
       });
       const text=await res.text();
@@ -172,8 +198,8 @@ const vendorToDb = (v) => ({
   account_name: v.accountName||"", account: v.account||"", theme: v.theme||"invoice",
 });
 const dbToUser = (r) => ({
-  id: r.id, name: r.name, email: r.email||"", role: r.role,
-  company: r.company, active: r.active, password: r.password||null,
+  id: r.id, authId: r.auth_id||null, name: r.name, email: r.email||"", role: r.role,
+  company: r.company, active: r.active,
 });
 
 // ─── 常數 ─────────────────────────────────────────────────────────────────────
@@ -993,7 +1019,7 @@ function CSVReconcile({ projects, vendors, setProjects }) {
     try {
       await fetch(`${SUPABASE_URL}/rest/v1/reconcile_batches`, {
         method: "POST",
-        headers: {"apikey":SUPABASE_ANON_KEY,"Authorization":`Bearer ${SUPABASE_ANON_KEY}`,"Content-Type":"application/json","Prefer":"resolution=merge-duplicates"},
+        headers: {...(await authHeaders()),"Content-Type":"application/json","Prefer":"resolution=merge-duplicates"},
         body: JSON.stringify({id:record.id,file_name:record.fileName,bank_type:record.bankType,saved_at:record.savedAt,saved_date:record.savedDate,parse_error:record.parseError||null}),
       });
       await sb.from("reconcile_rows").eq("batch_id",record.id).delete();
@@ -2204,75 +2230,95 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
 }
 
 // ─── USER MANAGEMENT ─────────────────────────────────────────────────────────
-function UserManagement({ users, setUsers }) {
-  const emptyForm = { name: "", email: "", role: "applicant", company: "紳太", active: true, password: "" };
+function UserManagement({ users, setUsers, currentUser }) {
+  // 帳號資料寫入一律走 Edge Function admin-users（service role 只存在 Supabase 端）
+  const emptyForm = { name: "", email: "", role: "applicant", company: "紳太", active: true, password: "", invite: true };
   const [form, setForm] = useState(emptyForm);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [pwModal, setPwModal] = useState(null); // { userId }
   const [newPw, setNewPw] = useState("");
   const [showPw, setShowPw] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const replaceUser = (u) => setUsers(prev => prev.map(x => x.id === u.id ? dbToUser(u) : x));
+  const run = async (fn) => { setBusy(true); try { await fn(); } catch (err) { alert(err.message); } finally { setBusy(false); } };
 
   const openNew = () => { setEditingId(null); setForm(emptyForm); setShowForm(true); };
   const openEdit = (u) => {
     setEditingId(u.id);
-    setForm({ name: u.name, email: u.email, role: u.role, company: u.company, active: u.active, password: u.password || "" });
+    setForm({ name: u.name, email: u.email, role: u.role, company: u.company, active: u.active, password: "", invite: false });
     setShowForm(true);
   };
-  const save = async () => {
-    try {
-      if (editingId !== null) {
-        const payload = { name: form.name, email: form.email, role: form.role, company: form.company, active: form.active };
-        if (form.password.trim()) payload.password = form.password.trim();
-        await sb.from("users").eq("id", editingId).update(payload);
-        setUsers(users.map(u => u.id === editingId ? { ...u, ...payload } : u));
-      } else {
-        const payload = { name: form.name, email: form.email, role: form.role, company: form.company, active: form.active, password: form.password.trim() || null };
-        const [created] = await sb.from("users").insert(payload);
-        setUsers([...users, dbToUser(created)]);
-      }
-      setShowForm(false); setEditingId(null); setForm(emptyForm);
-    } catch (err) { alert("儲存失敗：" + err.message); }
-  };
-  const savePw = async () => {
-    if (!newPw.trim()) return;
-    try {
-      await sb.from("users").eq("id", pwModal.userId).update({ password: newPw.trim() });
-      setUsers(users.map(u => u.id === pwModal.userId ? { ...u, password: newPw.trim() } : u));
-      setPwModal(null); setNewPw(""); setShowPw(false);
-    } catch (err) { alert("密碼更新失敗：" + err.message); }
-  };
+  const save = () => run(async () => {
+    if (editingId !== null) {
+      const { user } = await adminUsers("update", { id: editingId, name: form.name, email: form.email, role: form.role, company: form.company, active: form.active });
+      replaceUser(user);
+    } else {
+      if (!form.invite && form.password.length < 8) throw new Error("密碼至少 8 個字元");
+      const { user } = await adminUsers("create", {
+        name: form.name, email: form.email, role: form.role, company: form.company, active: form.active,
+        ...(form.invite ? {} : { password: form.password }),
+      });
+      setUsers(prev => [...prev, dbToUser(user)]);
+      if (form.invite) alert(`已寄邀請信到 ${user.email}，對方點信中連結即可設定密碼。`);
+    }
+    setShowForm(false); setEditingId(null); setForm(emptyForm);
+  });
+  const savePw = () => run(async () => {
+    if (newPw.length < 8) throw new Error("密碼至少 8 個字元");
+    const { user } = await adminUsers("set_password", { id: pwModal.userId, password: newPw });
+    replaceUser(user);
+    setPwModal(null); setNewPw(""); setShowPw(false);
+    alert("✅ 已設定臨時密碼，請用安全的方式告訴對方，並請對方登入後自行變更。");
+  });
+  const sendReset = () => run(async () => {
+    const { user, sent } = await adminUsers("send_reset", { id: pwModal.userId });
+    replaceUser(user);
+    setPwModal(null); setNewPw(""); setShowPw(false);
+    alert(sent === "invite" ? `已寄邀請信到 ${user.email}` : `已寄重設密碼信到 ${user.email}`);
+  });
+  const toggleActive = (u) => run(async () => {
+    const { user } = await adminUsers("update", { id: u.id, active: !u.active });
+    replaceUser(user);
+  });
+
+  const pwUser = pwModal ? users.find(u => u.id === pwModal.userId) : null;
 
   return (
     <div>
-      {/* 重設密碼 Modal */}
+      {/* 密碼 Modal：寄重設信 或 直接設定臨時密碼 */}
       {pwModal && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div style={{ background: "#fff", borderRadius: 16, padding: 24, width: 380, boxShadow: "0 8px 40px rgba(0,0,0,0.2)" }}>
             <div style={{ fontSize: 26, textAlign: "center", marginBottom: 10 }}>🔑</div>
-            <div style={{ fontWeight: 700, fontSize: 16, textAlign: "center", marginBottom: 6 }}>重設密碼</div>
+            <div style={{ fontWeight: 700, fontSize: 16, textAlign: "center", marginBottom: 6 }}>密碼</div>
             <div style={{ fontSize: 13, color: "#888", textAlign: "center", marginBottom: 20 }}>
-              {users.find(u => u.id === pwModal.userId)?.name}
+              {pwUser?.name}　{pwUser?.email || "（尚未設定 Email）"}
             </div>
-            <div style={{ marginBottom: 20 }}>
-              <label style={lbl}>新密碼</label>
+            <button onClick={sendReset} disabled={busy || !pwUser?.email}
+              style={{ width: "100%", border: "none", background: pwUser?.email ? "#0056b3" : "#ccc", color: "#fff", padding: "11px", borderRadius: 8, cursor: pwUser?.email ? "pointer" : "not-allowed", fontWeight: 700, marginBottom: 6 }}>
+              📧 {pwUser?.authId ? "寄重設密碼信" : "寄邀請信（建立登入帳號）"}
+            </button>
+            <div style={{ fontSize: 11, color: "#aaa", marginBottom: 18, textAlign: "center" }}>對方點信中連結自行設定新密碼（建議）</div>
+            <div style={{ borderTop: "1px solid #F0F0F0", paddingTop: 16, marginBottom: 16 }}>
+              <label style={lbl}>或直接設定臨時密碼（至少 8 字元）</label>
               <div style={{ position: "relative" }}>
                 <input style={{ ...inp, paddingRight: 44 }}
-                  type={showPw ? "text" : "password"}
+                  type={showPw ? "text" : "password"} autoComplete="new-password"
                   value={newPw} onChange={e => setNewPw(e.target.value)}
                   onKeyDown={e => e.key === "Enter" && savePw()}
-                  placeholder="請輸入新密碼" autoFocus />
+                  placeholder="請輸入臨時密碼" />
                 <span onClick={() => setShowPw(v => !v)}
                   style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", cursor: "pointer", fontSize: 16, color: "#aaa", userSelect: "none" }}>
                   {showPw ? "🙈" : "👁"}
                 </span>
               </div>
-              {newPw.trim() === "" && <div style={{ fontSize: 12, color: "#DC3545", marginTop: 5 }}>請填入新密碼</div>}
             </div>
             <div style={{ display: "flex", gap: 10 }}>
-              <button onClick={savePw} disabled={!newPw.trim()}
-                style={{ flex: 1, border: "none", background: newPw.trim() ? "#1a1a2e" : "#ccc", color: "#fff", padding: "11px", borderRadius: 8, cursor: newPw.trim() ? "pointer" : "not-allowed", fontWeight: 700 }}>
-                確認更新
+              <button onClick={savePw} disabled={busy || newPw.length < 8}
+                style={{ flex: 1, border: "none", background: newPw.length >= 8 ? "#1a1a2e" : "#ccc", color: "#fff", padding: "11px", borderRadius: 8, cursor: newPw.length >= 8 ? "pointer" : "not-allowed", fontWeight: 700 }}>
+                設定臨時密碼
               </button>
               <button onClick={() => { setPwModal(null); setNewPw(""); setShowPw(false); }}
                 style={{ flex: 1, border: "1px solid #ddd", background: "#fff", padding: "11px", borderRadius: 8, cursor: "pointer" }}>取消</button>
@@ -2291,7 +2337,7 @@ function UserManagement({ users, setUsers }) {
           <h3 style={{ ...sectionTitle, marginBottom: 16 }}>{editingId ? "✏️ 編輯帳號" : "＋ 新增帳號"}</h3>
           <div className="rwd-grid2" style={grid2}>
             <div style={field}><label style={lbl}>姓名</label><input style={inp} value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></div>
-            <div style={field}><label style={lbl}>Email</label><input style={inp} value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></div>
+            <div style={field}><label style={lbl}>Email（登入帳號）</label><input style={inp} type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></div>
             <div style={field}><label style={lbl}>角色</label>
               <select style={inp} value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>
                 {Object.entries(ROLES).map(([k,v]) => <option key={k} value={k}>{v}</option>)}
@@ -2303,23 +2349,25 @@ function UserManagement({ users, setUsers }) {
                 <option value="所有">所有</option>
               </select>
             </div>
-            <div style={field}>
-              <label style={lbl}>密碼{editingId ? "（留空表示不變更）" : ""}</label>
-              <div style={{ position: "relative" }}>
-                <input style={{ ...inp, paddingRight: 44 }}
-                  type={showPw ? "text" : "password"}
-                  value={form.password} onChange={e => setForm({ ...form, password: e.target.value })}
-                  placeholder={editingId ? "留空則不變更密碼" : "請設定密碼"} />
-                <span onClick={() => setShowPw(v => !v)}
-                  style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", cursor: "pointer", fontSize: 16, color: "#aaa", userSelect: "none" }}>
-                  {showPw ? "🙈" : "👁"}
-                </span>
+            {editingId === null && (
+              <div style={field}>
+                <label style={lbl}>密碼</label>
+                <select style={inp} value={form.invite ? "invite" : "set"} onChange={e => setForm({ ...form, invite: e.target.value === "invite" })}>
+                  <option value="invite">寄邀請信，讓本人自己設定（建議）</option>
+                  <option value="set">由我直接設定臨時密碼</option>
+                </select>
+                {!form.invite && (
+                  <input style={{ ...inp, marginTop: 8 }} type={showPw ? "text" : "password"} autoComplete="new-password"
+                    value={form.password} onChange={e => setForm({ ...form, password: e.target.value })}
+                    placeholder="至少 8 個字元" />
+                )}
               </div>
-            </div>
+            )}
           </div>
+          {editingId !== null && <div style={{ fontSize: 12, color: "#888", marginTop: 8 }}>要改密碼請用列表上的「🔑 密碼」。</div>}
           <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-            <button onClick={save} style={{ border: "none", background: "#1a1a2e", color: "#fff", padding: "10px 20px", borderRadius: 8, cursor: "pointer" }}>
-              {editingId ? "儲存變更" : "新增"}
+            <button onClick={save} disabled={busy} style={{ border: "none", background: "#1a1a2e", color: "#fff", padding: "10px 20px", borderRadius: 8, cursor: "pointer" }}>
+              {busy ? "處理中⋯" : editingId ? "儲存變更" : "新增"}
             </button>
             <button onClick={() => { setShowForm(false); setEditingId(null); }} style={{ border: "1px solid #ddd", padding: "10px 20px", borderRadius: 8, cursor: "pointer" }}>取消</button>
           </div>
@@ -2330,22 +2378,22 @@ function UserManagement({ users, setUsers }) {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ background: "#F8F9FA" }}>
-              {["姓名","Email","角色","公司","密碼","狀態","操作"].map(h => (
+              {["姓名","Email","角色","公司","登入","狀態","操作"].map(h => (
                 <th key={h} style={{ padding: "10px 14px", textAlign: "left", color: "#555", fontWeight: 600, borderBottom: "2px solid #F0F0F0" }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {users.map((u, i) => (
+            {users.map((u) => (
               <tr key={u.id} style={{ borderBottom: "1px solid #F8F8F8" }}>
                 <td style={{ ...td, fontWeight: 600 }}>{u.name}</td>
-                <td style={td}>{u.email}</td>
+                <td style={td}>{u.email || <span style={{ color: "#DC3545", fontSize: 12 }}>未設定（無法登入）</span>}</td>
                 <td style={td}><span style={{ background: "#E8F5E9", color: "#2E7D32", padding: "2px 8px", borderRadius: 6, fontSize: 12 }}>{ROLES[u.role]}</span></td>
                 <td style={td}>{u.company}</td>
                 <td style={td}>
-                  {u.password
-                    ? <span style={{ fontFamily: "monospace", letterSpacing: 2, color: "#888" }}>{"●".repeat(Math.min(u.password.length, 8))}</span>
-                    : <span style={{ color: "#ccc", fontSize: 12 }}>未設定</span>}
+                  {u.authId
+                    ? <span style={{ color: "#2E7D32", fontSize: 12 }}>已建立</span>
+                    : <span style={{ color: "#E65100", fontSize: 12 }}>尚未建立</span>}
                 </td>
                 <td style={td}><span style={{ color: u.active ? "#4CAF50" : "#F44336", fontWeight: 700 }}>{u.active ? "● 啟用" : "● 停用"}</span></td>
                 <td style={{ ...td, whiteSpace: "nowrap" }}>
@@ -2358,16 +2406,12 @@ function UserManagement({ users, setUsers }) {
                       style={{ border: "1px solid #C8DCF7", background: "#EBF5FF", color: "#0056b3", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>
                       🔑 密碼
                     </button>
-                    <button onClick={async () => {
-                      const nextActive = !u.active;
-                      try {
-                        await sb.from("users").eq("id", u.id).update({ active: nextActive });
-                        setUsers(users.map((x, j) => j === i ? { ...x, active: nextActive } : x));
-                      } catch (err) { alert("更新失敗：" + err.message); }
-                    }}
-                      style={{ border: `1px solid ${u.active ? "#fcc" : "#c8e6c9"}`, background: u.active ? "#fff5f5" : "#f0fff4", color: u.active ? "#c33" : "#2E7D32", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>
-                      {u.active ? "停用" : "啟用"}
-                    </button>
+                    {u.id !== currentUser?.id && (
+                      <button onClick={() => toggleActive(u)} disabled={busy}
+                        style={{ border: `1px solid ${u.active ? "#fcc" : "#c8e6c9"}`, background: u.active ? "#fff5f5" : "#f0fff4", color: u.active ? "#c33" : "#2E7D32", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>
+                        {u.active ? "停用" : "啟用"}
+                      </button>
+                    )}
                   </div>
                 </td>
               </tr>
@@ -2697,8 +2741,12 @@ function HsinchuApp({ currentUser }) {
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [loginError, setLoginError] = useState("");
-  const [loginName, setLoginName] = useState("");
+  const [loginEmail, setLoginEmail] = useState("");
   const [loginPw, setLoginPw] = useState("");
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [loginInfo, setLoginInfo] = useState("");
+  const [recoveryMode, setRecoveryMode] = useState(false); // 從重設密碼／邀請信連結進來
+  const [session, setSession] = useState(undefined);       // undefined = 還在確認登入狀態
   const [loginPwShow, setLoginPwShow] = useState(false);
   const [page, setPage] = useState("dashboard");
   const [theme, setTheme] = useState("invoice");
@@ -2721,12 +2769,40 @@ export default function App() {
   const setProjects = theme === "invoice" ? setInvoiceProjects : setHsinchuProjects;
   const setVendors  = theme === "invoice" ? setInvoiceVendors  : setHsinchuVendors;
 
+  // ── 登入狀態：Supabase Auth session ─────────────────────────────────────
   useEffect(() => {
+    // 從信件連結進來時網址會帶 type=recovery / invite
+    if (ARRIVED_FROM_EMAIL_LINK) setRecoveryMode(true);
+    supa.auth.getSession().then(({ data }) => setSession(data.session ?? null));
+    const { data: sub } = supa.auth.onAuthStateChange((event, s) => {
+      if (event === "PASSWORD_RECOVERY") setRecoveryMode(true);
+      setSession(s ?? null);
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  // ── 有 session 才讀資料；RLS 依身分決定能讀到什麼 ──────────────────────
+  const authUid = session?.user?.id || null;
+  useEffect(() => {
+    if (session === undefined) return;
+    if (!authUid) {
+      setCurrentUser(null); setUsers([]);
+      setInvoiceProjects([]); setHsinchuProjects([]); setInvoiceVendors([]); setHsinchuVendors([]);
+      setDbLoading(false);
+      return;
+    }
     const loadAll = async () => {
       setDbLoading(true); setDbError("");
       try {
+        const [me] = await sb.from("users").select(USER_COLS).eq("auth_id", authUid).get();
+        if (!me || !me.active) {
+          await supa.auth.signOut();
+          setLoginError(me ? "帳號已停用，請洽管理員" : "此登入帳號尚未對應到系統使用者，請洽管理員");
+          return;
+        }
+        const meUser = dbToUser(me);
         const [usersRaw, vendorsRaw, projectsRaw] = await Promise.all([
-          sb.from("users").select("*").order("id",{ascending:true}).get(),
+          sb.from("users").select(USER_COLS).order("id",{ascending:true}).get(),
           sb.from("vendors").select("*").order("id",{ascending:true}).get(),
           sb.from("projects").select("*").order("id",{ascending:true}).get(),
         ]);
@@ -2737,6 +2813,10 @@ export default function App() {
         const allProjects = (projectsRaw||[]).map(dbToProject);
         setInvoiceProjects(allProjects.filter(p => p.theme==="invoice"));
         setHsinchuProjects(allProjects.filter(p => p.theme==="hsinchu"));
+        setCurrentUser(prev => {
+          if (!prev || prev.id !== meUser.id) setPage(defaultPageFor(meUser.role));
+          return meUser;
+        });
       } catch(err) {
         setDbError("⚠️ 無法連線至資料庫：" + err.message);
       } finally {
@@ -2744,17 +2824,38 @@ export default function App() {
       }
     };
     loadAll();
-  }, []);
+  }, [authUid, session === undefined]);
 
-  const handleLogin = () => {
-    const found = users.find(u => u.name === loginName && u.active);
-    if (!found) { setLoginError("找不到此使用者或帳號已停用"); return; }
-    if (found.password && found.password !== loginPw) { setLoginError("密碼錯誤，請重新輸入"); return; }
-    setCurrentUser(found);
-    setLoginError(""); setLoginName(""); setLoginPw("");
-    setPage(defaultPageFor(found.role));
+  const handleLogin = async () => {
+    if (!loginEmail.trim() || !loginPw) return;
+    setLoginBusy(true); setLoginError(""); setLoginInfo("");
+    const { error } = await supa.auth.signInWithPassword({ email: loginEmail.trim().toLowerCase(), password: loginPw });
+    setLoginBusy(false);
+    if (error) {
+      setLoginError(/invalid login credentials/i.test(error.message) ? "Email 或密碼錯誤" :
+        /banned/i.test(error.message) ? "帳號已停用，請洽管理員" : "登入失敗：" + error.message);
+      return;
+    }
+    setLoginPw("");
   };
-  const handleLogout = () => { setCurrentUser(null); setPage("dashboard"); };
+  const handleForgot = async () => {
+    const email = loginEmail.trim().toLowerCase();
+    if (!email) { setLoginError("請先填入 Email，再按「忘記密碼」"); return; }
+    setLoginBusy(true); setLoginError(""); setLoginInfo("");
+    const { error } = await supa.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + window.location.pathname });
+    setLoginBusy(false);
+    if (error) setLoginError("寄送失敗：" + error.message);
+    else setLoginInfo("如果這個 Email 有帳號，重設密碼信已寄出，請到信箱點連結設定新密碼。");
+  };
+  const handleLogout = async () => { await supa.auth.signOut(); setCurrentUser(null); setPage("dashboard"); };
+  const changeMyPassword = async () => {
+    if (myPw.length < 8) { showToast("❌ 密碼至少 8 個字元","error"); return false; }
+    const { error } = await supa.auth.updateUser({ password: myPw });
+    if (error) { showToast("❌ 更新失敗："+error.message,"error"); return false; }
+    setMyPwModal(false); setMyPw(""); setMyPwShow(false);
+    showToast("✅ 密碼已更新！");
+    return true;
+  };
 
   const effectiveStatus = (p) => {
     if (p.payMethod === "關係人沖帳") return "關係人沖帳";
@@ -2871,42 +2972,84 @@ export default function App() {
     );
   }
 
-  if (!currentUser) {
+  const pageWrap = {minHeight:"100vh",background:"linear-gradient(135deg,#FDE8E8 0%,#FFF5F5 100%)",display:"flex",alignItems:"center",justifyContent:"center",padding:"16px",fontFamily:"'Noto Sans TC','Microsoft JhengHei',sans-serif"};
+  const loginCard = {background:"#fff",borderRadius:20,padding:"36px 28px",width:"100%",maxWidth:400,boxShadow:"0 16px 60px rgba(242,160,160,0.25)"};
+  const brand = (
+    <div style={{textAlign:"center",marginBottom:32}}>
+      <div style={{fontSize:32,fontWeight:900,color:"#F2A0A0",letterSpacing:-1,marginBottom:6}}>媽咪拜</div>
+      <div style={{fontSize:13,color:"#aaa"}}>發票開立申請與收款追蹤系統</div>
+    </div>
+  );
+  const pwToggle = <span onClick={()=>setLoginPwShow(v=>!v)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",cursor:"pointer",fontSize:16,color:"#aaa",userSelect:"none"}}>{loginPwShow?"🙈":"👁"}</span>;
+
+  // ── 從重設密碼／邀請信連結進來：先設定新密碼 ─────────────────────────────
+  if (recoveryMode && session) {
+    const submitNewPw = async () => {
+      if (loginPw.length < 8) { setLoginError("密碼至少 8 個字元"); return; }
+      setLoginBusy(true); setLoginError("");
+      const { error } = await supa.auth.updateUser({ password: loginPw });
+      setLoginBusy(false);
+      if (error) { setLoginError("設定失敗：" + error.message); return; }
+      setLoginPw(""); setRecoveryMode(false);
+      window.history.replaceState(null, "", window.location.pathname);
+      showToast("✅ 新密碼已設定");
+    };
     return (
-      <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#FDE8E8 0%,#FFF5F5 100%)",display:"flex",alignItems:"center",justifyContent:"center",padding:"16px",fontFamily:"'Noto Sans TC','Microsoft JhengHei',sans-serif"}}>
+      <div style={pageWrap}>
         <style>{"* { box-sizing: border-box; } body { margin: 0; } input, select { font-size: 16px; }"}</style>
-        <div style={{background:"#fff",borderRadius:20,padding:"36px 28px",width:"100%",maxWidth:400,boxShadow:"0 16px 60px rgba(242,160,160,0.25)"}}>
-          <div style={{textAlign:"center",marginBottom:32}}>
-            <div style={{fontSize:32,fontWeight:900,color:"#F2A0A0",letterSpacing:-1,marginBottom:6}}>媽咪拜</div>
-            <div style={{fontSize:13,color:"#aaa"}}>發票開立申請與收款追蹤系統</div>
-          </div>
-          <div style={{marginBottom:16}}>
-            <label style={lbl}>使用者名稱</label>
-            <select style={{...inp,fontSize:14}} value={loginName} onChange={e=>{setLoginName(e.target.value);setLoginError("");}}>
-              <option value="">— 請選擇 —</option>
-              {users.filter(u=>u.active).map(u=>(<option key={u.id} value={u.name}>{u.name}</option>))}
-            </select>
-          </div>
+        <div style={loginCard}>
+          {brand}
+          <div style={{fontSize:14,color:"#555",marginBottom:16,textAlign:"center"}}>{session.user?.email}<br/>請設定你的新密碼</div>
           <div style={{marginBottom:24}}>
-            <label style={lbl}>密碼</label>
+            <label style={lbl}>新密碼（至少 8 個字元）</label>
             <div style={{position:"relative"}}>
-              <input style={{...inp,paddingRight:44,fontSize:14}} type={loginPwShow?"text":"password"} value={loginPw}
-                onChange={e=>{setLoginPw(e.target.value);setLoginError("");}}
-                onKeyDown={e=>e.key==="Enter"&&handleLogin()}
-                placeholder={loginName&&!users.find(u=>u.name===loginName)?.password?"此帳號尚未設定密碼，可直接登入":"請輸入密碼"}
-              />
-              <span onClick={()=>setLoginPwShow(v=>!v)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",cursor:"pointer",fontSize:16,color:"#aaa",userSelect:"none"}}>{loginPwShow?"🙈":"👁"}</span>
+              <input style={{...inp,paddingRight:44,fontSize:14}} type={loginPwShow?"text":"password"} autoComplete="new-password" value={loginPw}
+                onChange={e=>{setLoginPw(e.target.value);setLoginError("");}} onKeyDown={e=>e.key==="Enter"&&submitNewPw()} autoFocus/>
+              {pwToggle}
             </div>
-            {loginName&&!users.find(u=>u.name===loginName)?.password&&(
-              <div style={{fontSize:11,color:"#aaa",marginTop:4}}>此帳號尚未設定密碼，點登入即可進入</div>
-            )}
           </div>
           {loginError&&(<div style={{background:"#FFF0F0",border:"1px solid #FCC",borderRadius:8,padding:"10px 14px",fontSize:13,color:"#c33",marginBottom:16}}>⚠ {loginError}</div>)}
-          <button onClick={handleLogin} disabled={!loginName}
-            style={{width:"100%",padding:14,background:loginName?"#F2A0A0":"#eee",color:loginName?"#fff":"#aaa",border:"none",borderRadius:12,fontSize:16,fontWeight:700,cursor:loginName?"pointer":"not-allowed",transition:"background 0.2s"}}>
-            登入
+          <button onClick={submitNewPw} disabled={loginBusy||loginPw.length<8}
+            style={{width:"100%",padding:14,background:loginPw.length>=8?"#F2A0A0":"#eee",color:loginPw.length>=8?"#fff":"#aaa",border:"none",borderRadius:12,fontSize:16,fontWeight:700,cursor:loginPw.length>=8?"pointer":"not-allowed"}}>
+            {loginBusy?"處理中⋯":"設定密碼並進入系統"}
           </button>
         </div>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    const canSubmit = loginEmail.trim() && loginPw && !loginBusy;
+    return (
+      <div style={pageWrap}>
+        <style>{"* { box-sizing: border-box; } body { margin: 0; } input, select { font-size: 16px; }"}</style>
+        <div style={loginCard}>
+          {brand}
+          <div style={{marginBottom:16}}>
+            <label style={lbl}>Email</label>
+            <input style={{...inp,fontSize:14}} type="email" autoComplete="username" value={loginEmail}
+              onChange={e=>{setLoginEmail(e.target.value);setLoginError("");setLoginInfo("");}} placeholder="name@mamibuy.com.tw" autoFocus/>
+          </div>
+          <div style={{marginBottom:8}}>
+            <label style={lbl}>密碼</label>
+            <div style={{position:"relative"}}>
+              <input style={{...inp,paddingRight:44,fontSize:14}} type={loginPwShow?"text":"password"} autoComplete="current-password" value={loginPw}
+                onChange={e=>{setLoginPw(e.target.value);setLoginError("");}}
+                onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="請輸入密碼"/>
+              {pwToggle}
+            </div>
+          </div>
+          <div style={{textAlign:"right",marginBottom:20}}>
+            <span onClick={handleForgot} style={{fontSize:12,color:"#999",cursor:"pointer",textDecoration:"underline"}}>忘記密碼？寄重設信</span>
+          </div>
+          {loginError&&(<div style={{background:"#FFF0F0",border:"1px solid #FCC",borderRadius:8,padding:"10px 14px",fontSize:13,color:"#c33",marginBottom:16}}>⚠ {loginError}</div>)}
+          {loginInfo&&(<div style={{background:"#F0FFF4",border:"1px solid #C8E6C9",borderRadius:8,padding:"10px 14px",fontSize:13,color:"#2E7D32",marginBottom:16}}>{loginInfo}</div>)}
+          <button onClick={handleLogin} disabled={!canSubmit}
+            style={{width:"100%",padding:14,background:canSubmit?"#F2A0A0":"#eee",color:canSubmit?"#fff":"#aaa",border:"none",borderRadius:12,fontSize:16,fontWeight:700,cursor:canSubmit?"pointer":"not-allowed",transition:"background 0.2s"}}>
+            {loginBusy?"登入中⋯":"登入"}
+          </button>
+        </div>
+        {toast&&<div style={{position:"fixed",bottom:24,right:24,background:toast.type==="success"?"#1a1a2e":"#F44336",color:"#fff",padding:"14px 20px",borderRadius:12,fontSize:14,zIndex:999}}>{toast.msg}</div>}
       </div>
     );
   }
@@ -2931,13 +3074,13 @@ export default function App() {
             <div style={{marginBottom:20}}>
               <label style={lbl}>新密碼</label>
               <div style={{position:"relative"}}>
-                <input style={{...inp,paddingRight:44}} type={myPwShow?"text":"password"} value={myPw} onChange={e=>setMyPw(e.target.value)} placeholder="請輸入新密碼" autoFocus/>
+                <input style={{...inp,paddingRight:44}} type={myPwShow?"text":"password"} value={myPw} onChange={e=>setMyPw(e.target.value)} placeholder="至少 8 個字元" autoComplete="new-password" autoFocus/>
                 <span onClick={()=>setMyPwShow(v=>!v)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",cursor:"pointer",fontSize:16,color:"#aaa",userSelect:"none"}}>{myPwShow?"🙈":"👁"}</span>
               </div>
             </div>
             <div style={{display:"flex",gap:10}}>
               <button disabled={!myPw.trim()}
-                onClick={async()=>{try{await sb.from("users").eq("id",currentUser.id).update({password:myPw.trim()});setUsers(prev=>prev.map(u=>u.id===currentUser.id?{...u,password:myPw.trim()}:u));setCurrentUser(u=>({...u,password:myPw.trim()}));setMyPwModal(false);setMyPw("");setMyPwShow(false);showToast("✅ 密碼已更新！");}catch(err){showToast("❌ 更新失敗："+err.message,"error");}}}
+                onClick={changeMyPassword}
                 style={{flex:1,border:"none",background:myPw.trim()?"#F2A0A0":"#ccc",color:"#fff",padding:"11px",borderRadius:8,cursor:myPw.trim()?"pointer":"not-allowed",fontWeight:700}}>確認更新</button>
               <button onClick={()=>{setMyPwModal(false);setMyPw("");setMyPwShow(false);}} style={{flex:1,border:"1px solid #ddd",background:"#fff",padding:"11px",borderRadius:8,cursor:"pointer"}}>取消</button>
             </div>
@@ -2985,7 +3128,7 @@ export default function App() {
               {page==="projects"     &&canAccess("projects")    &&<ProjectList projects={projectsWithStatus} setProjects={setProjectsWithDb} vendors={vendors} currentUser={currentUser} users={users} onExport={handleExport} onCopyProject={p=>{ setPrefillData(p); setPage("invoice-form"); }}/>}
               {page==="vendors"      &&canAccess("vendors")     &&<VendorManagement vendors={vendors} setVendors={setVendors} canEdit={currentUser.role==="finance"||currentUser.role==="admin"}/>}
               {page==="csv"          &&canAccess("csv")         &&<CSVReconcile projects={projectsWithStatus} vendors={vendors} setProjects={setProjectsWithDb}/>}
-              {page==="users"        &&canAccess("users")       &&<UserManagement users={users} setUsers={setUsers}/>}
+              {page==="users"        &&canAccess("users")       &&<UserManagement users={users} setUsers={setUsers} currentUser={currentUser}/>}
             </>
           )}
         </div>
