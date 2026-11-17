@@ -3102,6 +3102,7 @@ export default function App() {
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           <span style={{fontSize:12,color:"#fff"}}>{currentUser.name}</span>
           <span style={{background:"#ffffff33",color:"#fff",padding:"2px 8px",borderRadius:20,fontSize:11}}>{ROLES[currentUser.role]}</span>
+          <a href="https://mamibuy.new-chimei.com/admin" target="_blank" rel="noopener" title="開啟勞報系統（用同一組帳密登入）" style={{background:"#ffffff33",color:"#fff",borderRadius:8,padding:"4px 10px",fontSize:12,textDecoration:"none",whiteSpace:"nowrap"}}>📝 勞報</a>
           <button className="navbar-pw-btn" onClick={()=>{setMyPwModal(true);setMyPw("");setMyPwShow(false);}} style={{background:"#ffffff33",color:"#fff",border:"none",borderRadius:8,padding:"4px 10px",fontSize:12,cursor:"pointer"}}>🔑 密碼</button>
           <button onClick={handleLogout} style={{background:"#ffffff33",color:"#fff",border:"none",borderRadius:8,padding:"4px 10px",fontSize:12,cursor:"pointer"}}>登出</button>
         </div>
