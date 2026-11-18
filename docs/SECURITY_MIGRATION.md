@@ -65,6 +65,7 @@
 4. 合併到 main → GitHub Actions 自動部署到 GitHub Pages。
 5. 用 admin 登入，到帳號管理處理「尚未建立」的帳號（補 Email → 🔑 密碼 → 寄邀請信或設定臨時密碼）。
 6. 確認大家都能登入後，SQL Editor 執行 `supabase/manual/20261117000001_drop_password.sql` 把明碼欄位刪掉。
+   > ✅ 2026-11-18 已在正式環境執行完成：帳號改用 SQL 搬移（`supabase/manual/20261117000002_migrate_users_sql.sql`，取代需要 service role key 的 `scripts/migrate-users.mjs`），10 個帳號全數連結 Supabase Auth，`users.password` 欄位已刪除。
 7. 驗證：瀏覽器無痕視窗打 `https://kyzyozfdjqlhpcxtzzfp.supabase.co/rest/v1/users?select=*&apikey=<anon key>` 應回 401。
 
 ## 帳號搬移方式（擇一）
