@@ -158,8 +158,10 @@ const sb = {
 };
 
 // ─── DB 欄位轉換 ──────────────────────────────────────────────────────────────
+// 「自己的申請」：有 applicant_id 用 id 比（改名、同名都不會錯），舊資料沒對到 id 才用姓名（對齊 RLS）
+const isMyProject = (p, u) => p.applicantId != null ? p.applicantId === u.id : p.applicant === u.name;
 const dbToProject = (r) => ({
-  id: r.id, applicant: r.applicant, company: r.company, title: r.title,
+  id: r.id, applicant: r.applicant, applicantId: r.applicant_id ?? null, company: r.company, title: r.title,
   clientTitle: r.client_title||"", taxId: r.tax_id||"",
   amount: Number(r.amount)||0, taxAmount: Number(r.tax_amount)||0,
   status: r.status, invoiceDate: r.invoice_date||"",
@@ -576,7 +578,7 @@ function Dashboard({ projects, currentUser }) {
   const visible = projects.filter(p => {
     if (currentUser.role === "admin" || currentUser.role === "finance") return true;
     if (currentUser.role === "manager") return p.company === currentUser.company;
-    return p.applicant === currentUser.name;
+    return isMyProject(p, currentUser);
   });
 
   // ── 取出所有月份（YYYY-MM），排序由新到舊 ─────────────────────────────
@@ -1590,7 +1592,7 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
     if (currentUser.role === "admin" || currentUser.role === "finance") return true;
     if (currentUser.role === "manager") return p.company === currentUser.company;
     if (currentUser.role === "clerk") return ["申請中","已開立"].includes(p._effectiveStatus);
-    return p.applicant === currentUser.name;
+    return isMyProject(p, currentUser);
   });
 
   const [filter, setFilter] = useState("");
@@ -1620,7 +1622,8 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
     : <span style={{ marginLeft: 4, color: "#ccc", fontSize: 10 }}>⇅</span>;
 
   const canEdit = currentUser.role === "finance" || currentUser.role === "admin";
-  const canDelete = currentUser.role === "finance" || currentUser.role === "admin" || currentUser.role === "manager";
+  const canIssue = canEdit || currentUser.role === "clerk";
+  const canDelete =currentUser.role === "finance" || currentUser.role === "admin" || currentUser.role === "manager";
 
   // 月份列表（依發票開立日期，由新到舊）
   const months = useMemo(() => {
@@ -2166,15 +2169,15 @@ function ProjectList({ projects, setProjects, vendors, currentUser, users, onExp
                         <td style={{ ...td, fontSize: 12 }}>{p.applicant}</td>
                         <td style={{ ...td, whiteSpace: "nowrap" }}>
                           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                            {/* 標記已開立：申請中才顯示 */}
-                            {p._effectiveStatus === "申請中" && (
+                            {/* 標記已開立：申請中才顯示；限財務、管理員、行政（資料庫 projects_guard 同樣把關） */}
+                            {p._effectiveStatus === "申請中" && canIssue && (
                               <button onClick={e => { e.stopPropagation(); setIssueModal({ id: p.id }); setInvoiceNo(""); }}
                                 style={{ border: "1px solid #007BFF", background: "#EBF5FF", color: "#0056b3", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" }}>
                                 ✓ 標記已開立
                               </button>
                             )}
-                            {/* 標記已付款：已開立或到期未付款才顯示 */}
-                            {(p._effectiveStatus === "已開立" || p._effectiveStatus === "到期未付款") && (
+                            {/* 標記已付款：已開立或到期未付款才顯示；限財務、管理員 */}
+                            {canEdit && (p._effectiveStatus === "已開立" || p._effectiveStatus === "到期未付款") && (
                               <button onClick={async e => {
                                 e.stopPropagation();
                                 const tid = p.id;
@@ -2872,6 +2875,7 @@ export default function App() {
   const handleSubmit = async (formData) => {
     try {
       let vendorId = +formData.vendorId || null;
+      let bankKept = false;
       if (formData.vSelected && formData.vFields?.name) {
         const updatedVendorData = {
           name: formData.vFields.name||formData.vSelected.name,
@@ -2881,6 +2885,13 @@ export default function App() {
           account_name: formData.vFields.accountName||formData.vSelected.accountName,
           account: formData.vFields.account||formData.vSelected.account,
         };
+        // 已有的銀行資料只有財務、管理員能改（資料庫 vendors_guard 同樣把關）；其他人只能補填空白
+        if (!["finance","admin"].includes(currentUser.role)) {
+          [["bank","bank"],["branch","branch"],["account_name","accountName"],["account","account"]].forEach(([col, key]) => {
+            const old = formData.vSelected[key] || "";
+            if (old && updatedVendorData[col] !== old) { updatedVendorData[col] = old; bankKept = true; }
+          });
+        }
         await sb.from("vendors").eq("id", formData.vSelected.id).update(updatedVendorData);
         setVendors(prev => prev.map(v => v.id===formData.vSelected.id ? {...v,...dbToVendor({...v,...updatedVendorData,id:v.id})} : v));
         vendorId = formData.vSelected.id;
@@ -2907,7 +2918,8 @@ export default function App() {
       };
       const [created] = await sb.from("projects").insert(newProjectDb);
       setProjects(prev => [dbToProject(created), ...prev]);
-      showToast(formData.vSelected && formData.vFields?.name ? "✅ 發票申請已提交，廠商資料已同步更新！" : "✅ 發票申請已提交！");
+      showToast(bankKept ? "✅ 發票申請已提交；廠商原有的銀行帳號沒有更動，要修改請找財務"
+        : formData.vSelected && formData.vFields?.name ? "✅ 發票申請已提交，廠商資料已同步更新！" : "✅ 發票申請已提交！");
       setPage("projects");
     } catch(err) { showToast("❌ 提交失敗：" + err.message, "error"); }
   };
