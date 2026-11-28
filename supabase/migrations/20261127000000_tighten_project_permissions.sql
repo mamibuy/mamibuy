@@ -67,7 +67,7 @@ begin
       if new.status is distinct from '申請中'
          or coalesce(new.invoice_no, '') <> ''
          or coalesce(new.paid, 0) <> 0
-         or new.paid_amount is not null or coalesce(new.paid_date, '') <> ''
+         or new.paid_amount is not null or new.paid_date is not null
          or new.bank_fee is not null or new.commission is not null
          or coalesce(new.commission_no, '') <> '' or coalesce(new.expense_no, '') <> '' or coalesce(new.voucher_no, '') <> '' then
         raise exception '新申請只能是「申請中」，發票號碼與收款資料由財務填寫';
