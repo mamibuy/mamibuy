@@ -81,6 +81,65 @@ check("applicant 讀不到銀行對帳", ((await P.c.from("reconcile_batches").s
 check("manager 讀不到銀行對帳", ((await M.c.from("reconcile_batches").select("id")).data || []).length === 0);
 check("finance 讀得到銀行對帳", (await F.c.from("reconcile_batches").select("id")).data?.length === 1);
 
+// ── 2026-11-27 權限收緊：欄位分級 trigger ─────────────────────────────
+const err = (r) => r.error?.message || "";
+const uidP = uP.data?.[0]?.id;
+check("新增時自動填入 applicant_id", okIns.data?.[0]?.applicant_id === uidP, String(okIns.data?.[0]?.applicant_id));
+const paidIns = await P.c.from("projects").insert({ applicant: "測試申請者", company: "紳太", title: "自填已付款", status: "已付款", theme: "invoice" }).select();
+check("applicant 不能新增「已付款」的申請", !!paidIns.error, err(paidIns));
+const selfPaid = await P.c.from("projects").update({ status: "已付款" }).eq("title", "申請者-申請中").select();
+check("applicant 不能把自己的申請標成已付款", !!selfPaid.error, err(selfPaid));
+const selfInv = await P.c.from("projects").update({ invoice_no: "ZZ00000000" }).eq("title", "申請者-申請中").select();
+check("applicant 不能自己填發票號碼", !!selfInv.error, err(selfInv));
+const selfPaidAmt = await P.c.from("projects").update({ paid_amount: 1050, paid_date: "2026-11-27" }).eq("title", "申請者-申請中").select();
+check("applicant 不能填收款資料", !!selfPaidAmt.error, err(selfPaidAmt));
+const selfEdit = await P.c.from("projects").update({ amount: 1100, tax_amount: 1155, client_title: "改過的買方" }).eq("title", "申請者-申請中").select();
+check("applicant 可以改自己「申請中」的申請內容", selfEdit.data?.length === 1, err(selfEdit));
+const editPaid = await P.c.from("projects").update({ amount: 1 }).eq("title", "申請者-已付款").select();
+check("applicant 不能改已付款的申請內容", !!editPaid.error, err(editPaid));
+const giveAway = await P.c.from("projects").update({ applicant: "測試主管" }).eq("title", "申請者-申請中").select();
+check("applicant 不能把申請改成別人的", !!giveAway.error, err(giveAway));
+const moveCo = await P.c.from("projects").update({ company: "匯太" }).eq("title", "申請者-申請中").select();
+check("applicant 不能改公司", !!moveCo.error, err(moveCo));
+
+const clkEdit = await C.c.from("projects").update({ amount: 999 }).eq("title", "和和研-申請中").select();
+check("clerk 不能改別人申請的金額", !!clkEdit.error, err(clkEdit));
+const clkIssue = await C.c.from("projects").update({ status: "已開立", invoice_no: "CK12345678" }).eq("title", "新申請").select();
+check("clerk 可以標記已開立並填發票號碼", clkIssue.data?.length === 1 && clkIssue.data[0].status === "已開立", err(clkIssue));
+const clkPaid = await C.c.from("projects").update({ status: "已付款" }).eq("title", "主管-已開立").select();
+check("clerk 不能標記已付款", !!clkPaid.error, err(clkPaid));
+
+const mgrPaid = await M.c.from("projects").update({ status: "已付款" }).eq("title", "主管-已開立").select();
+check("manager 不能標記已付款", !!mgrPaid.error, err(mgrPaid));
+const mgrIns = await M.c.from("projects").insert({ applicant: "測試主管", company: "匯太", title: "主管-申請中", status: "申請中", theme: "invoice" }).select();
+const mgrIssue = await M.c.from("projects").update({ status: "已開立", invoice_no: "MG12345678" }).eq("title", "主管-申請中").select();
+check("manager 不能標記已開立", !!mgrIssue.error, err(mgrIssue));
+const mgrEdit = await M.c.from("projects").update({ amount: 777 }).eq("title", "主管-申請中").select();
+check("manager 可以改同公司「申請中」的內容", mgrIns.data?.length === 1 && mgrEdit.data?.length === 1, err(mgrIns) || err(mgrEdit));
+
+const finPaid = await F.c.from("projects").update({ status: "已付款", paid_amount: 3150, paid_date: "2026-11-27" }).eq("title", "主管-已開立").select();
+check("finance 可以標記已付款", finPaid.data?.length === 1, err(finPaid));
+
+// vendors 銀行資料
+const vFill = await P.c.from("vendors").update({ bank: "玉山銀行", account: "0001234567" }).eq("name", "測試廠商A").select();
+check("applicant 可以補填空白的銀行資料", vFill.data?.length === 1, err(vFill));
+const vChange = await P.c.from("vendors").update({ account: "9999999999" }).eq("name", "測試廠商A").select();
+check("applicant 不能改已有的銀行帳號", !!vChange.error, err(vChange));
+const vSame = await P.c.from("vendors").update({ name: "測試廠商A", bank: "玉山銀行", account: "0001234567" }).eq("name", "測試廠商A").select();
+check("送出相同的銀行資料不會被擋（申請表單會整筆回寫）", vSame.data?.length === 1, err(vSame));
+const vFin = await F.c.from("vendors").update({ account: "1112223334" }).eq("name", "測試廠商A").select();
+check("finance 可以改銀行帳號", vFin.data?.length === 1, err(vFin));
+
+// audit_log
+const logP = await P.c.from("audit_log").select("id");
+check("applicant 讀不到異動紀錄", (logP.data || []).length === 0);
+const logF = await F.c.from("audit_log").select("table_name,action,actor_name,changes").eq("table_name", "vendors").eq("action", "UPDATE").order("id");
+const lastV = logF.data?.[logF.data.length - 1];
+check("finance 讀得到異動紀錄，且記下是誰改的", lastV?.actor_name === "測試財務", JSON.stringify(lastV));
+check("UPDATE 只記有變的欄位", !!lastV && Object.keys(lastV.changes).join(",") === "account", JSON.stringify(lastV?.changes));
+const logUsers = await A.c.from("audit_log").select("changes").eq("table_name", "users");
+check("users 的異動紀錄不含 password", (logUsers.data || []).length > 0 && logUsers.data.every((r) => !JSON.stringify(r.changes).includes("\"password\"")));
+
 // ── Edge Function admin-users ────────────────────────────────────────
 const noAuth = await fetch(`${URL}/functions/v1/admin-users`, { method: "POST", headers: { apikey: ANON, "Content-Type": "application/json" }, body: "{}" });
 check("Edge Function：未登入被拒", noAuth.status === 401, String(noAuth.status));
