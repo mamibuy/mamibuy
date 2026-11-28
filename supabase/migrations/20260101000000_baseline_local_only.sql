@@ -41,7 +41,7 @@ create table if not exists public.projects (
   vendor_id         bigint,
   paid              numeric default 0,
   paid_amount       numeric,
-  paid_date         text,
+  paid_date         date,
   bank_fee          numeric,
   commission        numeric,
   commission_no     text,
